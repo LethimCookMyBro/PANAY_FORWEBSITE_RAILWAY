@@ -1,0 +1,17 @@
+# โฟลเดอร์ Dependencies ที่ติดตั้งบนเครื่อง Host (สำคัญมาก!)
+# บรรทัดนี้จะป้องกันไม่ให้ node_modules จาก Windows เข้าไปใน Image
+node_modules
+
+# ไฟล์ Build ที่อาจจะเคยสร้างไว้ (ไม่จำเป็นสำหรับ Dev Server)
+dist
+build
+
+# ไฟล์ Log และไฟล์ของ IDE
+npm-debug.log
+.vscode/
+.idea/
+.DS_Store
+
+# ไฟล์ Environment ของเครื่อง local
+.env
+.env.local

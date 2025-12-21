@@ -1,0 +1,28 @@
+# Node / Frontend
+node_modules/
+frontend/dist/
+.vite/
+
+# Python / Backend
+__pycache__/
+*.pyc
+venv/
+.env
+*.sqlite
+# Downloaded models cache - บรรทัดนี้สำคัญที่สุด
+models/
+
+# Docker
+*.log
+*.pid
+*.sock
+*.db
+docker-volumes/
+ollama/
+
+# VSCode
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db

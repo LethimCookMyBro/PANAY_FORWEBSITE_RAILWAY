@@ -1,0 +1,21 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+.venv
+venv/
+env/
+
+# Git directory
+.git/
+
+# Downloaded models cache - This prevents build errors on Windows
+models/
+
+# IDE and OS specific files
+.vscode/
+.idea/
+*.DS_Store

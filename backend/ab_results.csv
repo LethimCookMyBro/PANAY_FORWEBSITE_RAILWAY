@@ -1,0 +1,527 @@
+﻿id,use_rerank,processing_time,retrieval_time,context_count,answer_relevancy,faithfulness,context_precision,context_recall,reply,error
+1,False,,,,,,,,,"HTTPConnectionPool(host='localhost', port=5000): Read timed out. (read timeout=180)"
+1,True,33.04252712200105,1.7615354800000205,4,0.8895778357982635,0.9553840160369873,0.99999999995,0.0,"The main advantage of PLCnext is its openness and flexibility, allowing engineers to use the best programming language for the task, combine existing code, and integrate open-source software, which significantly speeds up application development.",
+2,False,37.19677754000077,0.2458230359989102,4,0.952745646238327,0.975310742855072,0.99999999995,0.0,"The issue you're experiencing with not being able to warm start your AXC F 3152 PLCnext is likely due to the Start/Stop switch position. Ensure that the switch is set to 'Start' position (not 'Stop'). The hardware device HMI might be preventing the PLC from starting due to the switch configuration.
+
+**Specifications:**
+
+- Model: AXC F 3152
+- PLCnext Technology platform
+- Firmware version: Please check the current firmware version for any updates or specific settings that may affect warm start functionality.
+- Start/Stop switch position: Verify that the switch is set to 'Start' position.",
+2,True,29.78350181300084,1.2940354849997675,4,0.9500123262405396,0.9809064567089081,0.99999999995,0.0,"The issue is likely caused by the Start/Stop switch position. Check that the switch is set to 'Start' position (not 'Stop'). The hardware device HMI is preventing the PLC from starting due to the switch configuration.
+
+Please ensure the Start/Stop switch on your AXC F 3152 PLC is in the 'Start' position, as this will allow the PLC to warm start successfully.",
+3,False,35.143612846000906,0.16322156699970947,4,0.9648688435554504,0.9700653851032257,1.0,0.9316043555736542,The AXC F 3152 is compatible with firmware version 2025.0.3 (25.0.3.103) when using hardware version 3.,
+3,True,31.422953565999705,1.433641751000323,4,0.9648688435554504,0.9641034305095673,0.99999999995,0.0,The AXC F 3152 is compatible with firmware version 2025.0.3 (25.0.3.103) when using hardware version 3.,
+4,False,36.795002680000835,0.2230491800000891,4,0.8969184160232544,0.9357643127441406,0.99999999995,0.0,"To resolve the 'Arp.Plc.Domain.PLCnext.Condition.Failed' error, follow these steps:
+
+1. Check the physical Start/Stop switch on the PLC unit and ensure it is in the 'Start' position (not 'Stop'). The switch position must match the software configuration.
+
+2. If the switch position is correct, check the HMI device configuration to ensure it matches the PLC unit's settings.
+
+3. Verify that there are no other errors or conflicts in the project configuration that could be causing the issue.
+
+4. If none of the above steps resolve the issue, try downloading all changes and starting the project again.
+
+Note: This error typically indicates a problem with the PLC's startup process or configuration. Ensuring the Start/Stop switch is set correctly and verifying the HMI device configuration are common causes of this error.",
+4,True,43.98917096600053,1.2810324239999318,4,0.8758502304553986,0.8871978521347046,0.99999999995,0.0,"To resolve the 'arp.Plc.Domain.Plc.Condition.Failed' error, follow these steps:
+
+1. Check the physical Start/Stop switch on the PLC unit.
+2. Ensure the switch is in 'Start' position (not 'Stop').
+3. The switch position must match the software configuration.
+4. If the switch is correct, check the HMI device configuration.
+
+Additionally, if you are experiencing issues with 'Download Changes' or 'Write and Start Project Changes', try using 'Download All' instead, as it may resolve the issue due to improper preconditions or task configuration changes.
+
+Please note that this error has been resolved in firmware 2025.0.3, where gateways '0.0.0.0' are now ignored when converting IP configurations, and 'systemd' network management sets up a default gateway correctly.",
+5,False,,,,,,,,,"HTTPConnectionPool(host='localhost', port=5000): Read timed out. (read timeout=180)"
+5,True,50.588233958000274,1.8319325450011092,4,0.9200698733329773,0.914557009935379,0.0,0.0,"To send data from a PLCnext device to InfluxDB, use the InfluxDB line protocol format and send HTTP POST requests to the write endpoint of your InfluxDB instance (e.g. http://<ip>:8086/write?db=mydb). Ensure proper headers and payload formatting.
+
+Here's an example using Python libraries like 'requests' to send data from PLCnext Linux environment:
+
+```python
+import requests
+
+# Define the InfluxDB write endpoint URL
+url = ""http://<ip>:8086/write""
+
+# Set the database name, measurement name, tags, and fields for the data point
+db_name = ""mydb""
+measurement_name = ""my_measurement""
+tags = {""tag1"": ""value1"", ""tag2"": ""value2""}
+fields = {""field1"": 10.0, ""field2"": 20.0}
+
+# Define the InfluxDB line protocol format
+line_protocol = f""[{db_name}] {measurement_name} {{ {', '.join(f'{key}={value}' for key, value in tags.items())}} } {', '.join(f'{key}={value}' for key, value in fields.items())}""
+
+# Set the HTTP POST request headers and payload
+headers = {""Content-Type"": ""text/plain""}
+payload = line_protocol
+
+# Send the HTTP POST request to InfluxDB
+response = requests.post(url, headers=headers, data=payload)
+
+# Check if the response was successful
+if response.status_code == 204:
+    print(""Data sent successfully"")
+else:
+    print(f""Error sending data: {response.text}"")
+```
+
+**SPECIFICATIONS:**
+
+*   InfluxDB version: 1.8 or later
+*   Python library: requests (version 2.25 or later)
+*   PLCnext device: Any supported Linux-based device with the necessary libraries and dependencies installed
+
+Please note that you should replace `<ip>` with the actual IP address of your InfluxDB instance.
+
+**PROTOCOL/MODE INFORMATION:** The protocol used here is HTTP POST, which is a common communication mode for sending data to InfluxDB.",
+6,False,31.51519311899756,0.1799946130013268,4,0.9451612234115601,0.9727093577384949,0.0,0.0,"The issue you're experiencing with not being able to warm start your AXC F 3152 PLCnext is likely due to the Start/Stop switch position. Ensure that the switch is set to 'Start' position (not 'Stop'). The hardware device HMI might be preventing the PLC from starting due to the switch configuration.
+
+**Specifications:**
+
+- Model: AXC F 3152
+- PLCnext Technology platform
+- Firmware version: Please check the current firmware version for any updates or specific settings that may affect warm start functionality.
+- Start/Stop switch position: Verify that the switch is set to 'Start' position.",
+6,True,32.01491789100328,1.1744512030018086,4,0.9527176916599274,0.9677605628967285,0.0,0.0,"The issue you're experiencing with not being able to warm start your AXC F 3152 PLCnext is likely due to the Start/Stop switch position. Ensure that the switch is set to 'Start' position (not 'Stop'). The hardware device HMI might be preventing the PLC from starting due to the switch configuration.
+
+**Specifications:**
+
+- Model: AXC F 3152
+- PLCnext Technology platform
+- Start/Stop switch position: 'Start'
+- Hardware device HMI configuration: Ensure it allows for startup when in 'Start' position.",
+7,False,,,,,,,,,"HTTPConnectionPool(host='localhost', port=5000): Read timed out. (read timeout=180)"
+7,True,,,,,,,,,"HTTPConnectionPool(host='localhost', port=5000): Read timed out. (read timeout=180)"
+8,False,26.438304053001048,0.3744334330003767,4,0.8385490775108337,0.8998596370220184,0.0,0.0,"After updating to firmware version 2025.0.3, verify that all ACF components are re-registered and compatible with the new firmware. Restart the system and recheck the logs.
+
+**Specification:**
+- Firmware version: 2025.0.3
+- Controller model: AXC F 2152",
+8,True,40.33949990700057,2.074945011001546,4,0.8445016741752625,0.9026129245758057,0.0,0.0,"After updating to firmware version 2025.0.2, verify that all ACF components are re-registered and compatible with the new firmware. Restart the system and recheck the logs.
+
+**Specifications:**
+
+* Firmware version: 2025.0.2
+* Device model: AXC F 2152
+* ACF component registration
+* Compatibility check
+* System restart
+* Log checking",
+9,False,34.93774499700157,0.1831845990018337,4,0.9202092289924622,0.9430606961250305,0.0,0.0,"To parse XML config files in PLCnext using 2025.0.2, ensure the XML file encoding is UTF-8 and well-formed.
+
+PLCnext supports .NET Core and System.Xml namespaces for parsing XML files. However, malformed XML can trigger parsing exceptions. Use try-catch blocks to handle any exceptions that may occur during parsing.
+
+Validate the XML structure beforehand to prevent parsing errors. This can be done by checking the XML file's syntax and semantics before attempting to parse it.
+
+Additionally, consider using a library or framework that provides built-in support for parsing XML files in PLCnext, such as the System.Xml namespace. This can simplify the process of parsing XML files and reduce the risk of errors.
+
+It is also recommended to check the PLCnext documentation for specific guidance on parsing XML config files in version 2025.0.2.
+
+I could not find relevant information in the PLCnext documentation regarding a specific library or framework for parsing XML files.",
+9,True,,,,,,,,,"HTTPConnectionPool(host='localhost', port=5000): Read timed out. (read timeout=180)"
+10,False,,,,,,,,,"HTTPConnectionPool(host='localhost', port=5000): Read timed out. (read timeout=180)"
+10,True,,,,,,,,,"HTTPConnectionPool(host='localhost', port=5000): Read timed out. (read timeout=180)"
+11,False,,,,,,,,,"HTTPConnectionPool(host='localhost', port=5000): Read timed out. (read timeout=180)"
+11,True,,,,,,,,,"HTTPConnectionPool(host='localhost', port=5000): Read timed out. (read timeout=180)"
+12,False,53.81250132000059,0.41888749099962297,4,0.9481888115406036,0.9457244873046875,0.0,0.0,"To load and execute a custom ACF (Application Component Framework) component in PLCnext Engineer, follow these steps:
+
+1.  **Deploy the binary to the target device**: First, you need to deploy the binary of your custom ACF component to the target device. This can be done using the PLCnext Tool or by uploading the binary directly to the device.
+
+2.  **Register it in the ACF configuration**: After deploying the binary, register your custom ACF component in the ACF configuration file (usually named `acf.config`). You need to specify the path to the settings for each component instance using the `settingsPath` parameter.
+
+3.  **Ensure it is listed under Component Manager**: Make sure that your custom ACF component is listed under the Component Manager in PLCnext Engineer. This can be done by checking the ACF configuration file or by manually adding it to the Component Manager.
+
+4.  **Restart the controller and verify its execution**: Once you have registered your custom ACF component, restart the controller and verify that it is executing correctly using log messages or status indicators.
+
+5.  **Verify the settings are applied**: After restarting the controller, verify that the settings specified in the `settingsPath` parameter are being applied to your custom ACF component.
+
+By following these steps, you should be able to load and execute a custom ACF component in PLCnext Engineer.",
+12,True,47.86433587200008,1.958494366001105,4,0.9019221365451813,0.914521336555481,0.0,0.0,"To load and execute a custom ACF (Application Configuration Framework) component in PLCnext Engineer, follow these steps:
+
+1.  **Deploy the binary to the target device**: Use PC Worx Engineer or another tool that supports deployment to transfer your custom ACF component's binary to the target device.
+2.  **Register it in the ACF configuration**: In the ACF configuration file (*.acf.config), add a new component by specifying its type, name, and other relevant parameters. This will register the component with the PLCnext Technology firmware.
+3.  **Ensure it is listed under Component Manager**: Verify that your custom component is listed under the Component Manager in the PLCnext Engineer interface.
+
+**Additional Considerations**
+
+*   Make sure to define the environment variable ARP_PROJECTS_DIR in the ACF settings for the project directory (/opt/plcnext/projects). This is required for PC Worx Engineer to download the project.
+*   If an ACF system or service component has a project configuration, specify the configuration path in the component settings (*.settings) or XML element <ConfigSettings> with the path attribute.
+
+**Verification**
+
+After completing these steps, restart the controller and verify that your custom component is executing correctly using log messages or status indicators.",
+13,False,42.936556745000416,0.12619066499973997,4,0.861720621585846,0.8990005850791931,0.9999999999666667,0.0,"To handle time data correctly in a PLCnext application, use the standard time library in C++ (e.g., `<chrono>` or `time.h`) or PLCnext APIs. Be aware of timezone settings and consider using UTC for consistent data handling across systems.
+
+For example, you can use the `<chrono>` library to work with time points and durations:
+
+```cpp
+#include <chrono>
+
+int main() {
+    // Get the current time point
+    auto now = std::chrono::system_clock::now();
+
+    // Convert to local time
+    auto now_local = std::chrono::system_clock::to_time_t(now);
+
+    // Use a timezone-aware library like ICU or Boost.DateTime for more accurate conversions
+
+    return 0;
+}
+```
+
+Alternatively, you can use the PLCnext APIs to handle time-related operations. For example:
+
+```cpp
+#include ""plcnext.h""
+
+int main() {
+    // Get the current timestamp
+    uint32_t timestamp = plcGetTimestamp();
+
+    // Convert to UTC time
+    uint32_t utc_timestamp = timestamp;
+
+    return 0;
+}
+```
+
+When working with PROFINET data, ensure that the monitor time is at least 24 ms. The monitor time is the product of 'Reduction ratio' and 'Monitor factor' (in PLCnext Engineer: 'Profinet' editor group, 'Interface list' editor).
+
+In PLCnext Engineer, when setting date/time via PLCnext Engineer and immediately shutting off the power supply, the date/time setting did not become effective. This is a known issue in older versions of PLCnext Engineer. To resolve this, update to the latest version of PLCnext Engineer or use a different method for setting date/time.
+
+Remember to consider timezone settings when handling time data in your PLCnext application. Using UTC can help ensure consistent data handling across systems.",
+13,True,37.00460291199852,1.3312794739977107,4,0.8570983409881592,0.897697389125824,0.99999999995,0.0,"To handle time data correctly in a PLCnext application, use the standard time library in C++ (e.g., `<chrono>` or `time.h`) or PLCnext APIs. Be aware of timezone settings and consider using UTC for consistent data handling across systems.
+
+For example, you can use the `<chrono>` library to work with time points and durations:
+
+```cpp
+#include <iostream>
+#include <chrono>
+
+int main() {
+    // Get the current time
+    auto now = std::chrono::system_clock::now();
+
+    // Convert to UTC time
+    auto utc_now = std::chrono::system_clock::to_time_t(now);
+
+    return 0;
+}
+```
+
+Alternatively, you can use PLCnext APIs such as `PLCnext::Time` or `PLCnext::DateTime` to handle time data.
+
+When working with timezone settings, consider using UTC for consistent data handling across systems. You can use the `std::chrono::system_clock::to_time_t` function to convert a time point to a time_t value in UTC.
+
+Remember to always validate and sanitize user input when working with time data to avoid potential issues with timezone conversions or date arithmetic.",
+14,False,44.44648151100046,0.18275048999930732,4,0.9322779774665833,0.9331352412700653,0.0,0.0,"To acquire GPS data from a TC Router and send it to a PLCnext controller, follow these steps:
+
+1.  Configure the TC Router to forward GPS data over TCP or UDP using its internal GPS service.
+2.  On the PLCnext side, implement a socket listener to receive the GPS NMEA sentences and parse them as needed.
+
+**TC Router Configuration:**
+
+*   Ensure that the TC Router is configured to forward GPS data over the desired protocol (TCP or UDP).
+*   Set up the GPS service on the TC Router to provide the necessary data.
+*   Configure the IP address and port settings for the TCP or UDP connection.
+
+**PLCnext Controller Configuration:**
+
+*   Open a socket listener on the PLCnext controller to receive incoming connections from the TC Router.
+*   Use the correct protocol (TCP or UDP) and port settings that match the TC Router configuration.
+*   Implement a parser to decode the GPS NMEA sentences received from the TC Router.
+
+**Socket Listener Configuration:**
+
+*   Use the `TCPSocket` or `UDPSocket` class in the PLCnext controller's programming language of choice (e.g., C++) to create a socket listener.
+*   Set up the socket listener to listen on the correct IP address and port number that matches the TC Router configuration.
+
+**Parsing GPS NMEA Sentences:**
+
+*   Use a library or function provided by the PLCnext controller or a third-party library to parse the GPS NMEA sentences received from the TC Router.
+*   Implement logic to extract relevant data from the parsed sentences, such as latitude, longitude, altitude, and timestamp.
+
+By following these steps, you can successfully acquire GPS data from a TC Router and send it to a PLCnext controller.",
+14,True,,,,,,,,,"HTTPConnectionPool(host='localhost', port=5000): Read timed out. (read timeout=180)"
+15,False,21.861789353002678,0.12233795100110001,4,0.8817522525787354,0.933912456035614,1.0,0.8825457692146301,"PLCnext Technology is an open control platform developed by Phoenix Contact as a basis for a new, flexible solution that combines the advantages of traditional PLCs with the openness and flexibility of smart devices. It serves as the foundation for a new generation of industrial automation systems, offering a unique blend of classic PLC programming and high-level language programming capabilities.",
+15,True,31.764201926998794,0.9993344710019301,4,0.8224425315856934,0.8640674948692322,0.99999999995,0.5,"PLCnext Technology is an industrial computer platform developed by Phoenix Contact that combines a powerful processor with a Linux-based operating system, allowing for flexible and open development of control applications. It is designed to provide a high-performance computing solution for industrial automation applications.
+
+The PLCnext Technology platform features:
+
+*   A 32-bit or 64-bit ARM Cortex-A53/A57 processor
+*   A Linux-based operating system (Ubuntu-based)
+*   Support for various programming languages, including C/C++, Python, and others
+*   Integration with Phoenix Contact's PROFINET, EtherCAT, and other industrial communication protocols
+*   A Global Data Space (GDS) for centralized data exchange between user programs, fieldbus systems, and system programs
+
+PLCnext Technology is designed to provide a flexible and open platform for developing control applications, allowing developers to choose the best programming language and tools for their specific needs.",
+16,False,27.940769319000538,0.10902101399915409,4,0.9255886971950531,0.9277553558349609,1.0,0.8787878851095836,"The AXC F 2152 controller is a Class 2000 controller designed for maximum performance, easy handling, and use in harsh industrial environments. It is fast, robust, and easy to use, making it an ideal choice for medium-sized to complex automation tasks. The controller features two Ethernet interfaces, PROFINET, Modbus/TCP, and an integrated UPS, providing flexibility and reliability in various applications.",
+16,True,30.31657305599947,1.3523001990033663,4,0.8951536417007446,0.8934985101222992,1.0,0.8347150683403015,"The AXC F 2152 is a Class 2000 controller from Phoenix Contact's PLCnext Technology platform, designed for small to medium-sized automation tasks. It features an integrated Ethernet connection and Axioline F local bus connection, providing flexibility in networking options such as PROFINET, Modbus/TCP, and an integrated UPS. The controller is known for its fast processing speed, robustness, and ease of use, making it suitable for harsh industrial environments.",
+17,False,27.490430166002625,0.13266854200264788,4,0.8930177688598633,0.8915766477584839,0.9999999999,0.0,"To update the firmware on an AXC F 2152 controller, follow these steps:
+
+1.  Download the latest firmware version from the Phoenix Contact website (phoenixcontact.net/products).
+2.  Ensure you have a valid license key for the new firmware version.
+3.  Connect to the AXC F 2152 controller using a PC and the Phoenix Contact software (e.g., PFC-Config).
+4.  Start the update process by selecting ""Update Firmware"" in the software menu.
+5.  Follow the on-screen instructions to complete the firmware update.
+
+**Important:** Before updating, ensure that all ACF components are re-registered and compatible with the new firmware version. Restart the system and recheck the logs if necessary.
+
+For more detailed information, refer to the PLCnext documentation or contact Phoenix Contact support for assistance.",
+17,True,36.70142804600255,1.3700423770023917,4,0.9213117957115173,0.9162975549697876,0.9999999999,0.0,"To update the firmware on an AXC F 2152, follow these steps:
+
+1. Connect to the device using a PC and ensure that it is powered on.
+2. Download the latest firmware from the Phoenix Contact website or through the PLCnext software.
+3. Use the PLCnext software to upload the new firmware to the device.
+4. Follow the on-screen instructions to complete the update process.
+
+Please note that updating the firmware may require a reboot of the system. It is recommended to save any open projects and configurations before starting the update process.
+
+Additionally, it is essential to verify that all ACF components are re-registered and compatible with the new firmware after an update. Restarting the system and checking the logs will ensure a smooth transition.
+
+For more detailed information on updating the firmware on an AXC F 2152, please refer to the PLCnext documentation or contact Phoenix Contact support for assistance.",
+18,False,30.04149440800029,0.12123188699843013,4,0.9075482189655304,0.9080408215522766,0.8333333332916666,0.0,"An LTS (Long-Term Support) firmware version is a maintenance release that provides support for a specific period of time, typically 2-3 years, after its initial release. It includes bug fixes, security updates, and feature enhancements, but does not introduce new features or functionality.
+
+In the context of Phoenix Contact's PLCnext Technology platform, LTS firmware versions are based on previous versions of the respective branch and only contain changes, error corrections, and security updates from those versions.",
+18,True,28.63128326399965,1.3421743190010602,4,0.9064538478851318,0.9100558757781982,0.8333333332916666,0.0,"An LTS (Long-Term Support) firmware version is a maintenance release that provides support for a specific period of time, typically 2-3 years, after its initial release. It includes bug fixes, security updates, and feature enhancements, but does not introduce new features or functionality.
+
+In the context of Phoenix Contact's PLCnext Technology platform, LTS firmware versions are based on previous versions of the respective branch, meaning they only contain changes, error corrections, and security updates from the previous version.",
+19,False,25.545446965999872,0.14386834800097859,4,0.9027203619480133,0.9588890671730042,0.8333333332916666,0.0,"AXL SE DO16/1 is a digital output module from Phoenix Contact's Axioline Smart Elements platform, specifically designed for 16 digital outputs. It operates at a nominal voltage of 24 V DC and has a maximum current rating of 500 mA. The connection technology used is 1-conductor.",
+19,True,29.467837858002895,1.31466191599975,4,0.9081692695617676,0.9614315032958984,0.8333333332916666,0.0,"AXL SE DO16/1 is a digital output module from Phoenix Contact's Axioline Smart Elements, with 16 digital outputs that can operate at 24 V DC and have a maximum current consumption of 500 mA.",
+20,False,,,,,,,,,"HTTPConnectionPool(host='localhost', port=5000): Read timed out. (read timeout=180)"
+20,True,46.804006901998946,1.9181383950017334,4,0.8626431822776794,0.9180352091789246,0.9999999999666667,0.0,"An Inline ECO (Electronic Control Unit) terminal is a type of I/O module used in the Phoenix Contact PLCnext Technology platform. It is designed for analog input applications and provides a connection technology of 2-conductor for its analog inputs, which can handle signals between 4 mA to 20 mA.
+
+The Inline ECO terminals are part of the IB IL AI 4/I/4-20-ECO family and are used for integrating the Inline station into the bus system via a bus coupler or controller. They have connectors for 1, 2, 3, and 4-wire sensors or actuators, which can be connected using spring-cage technology.
+
+The Inline ECO terminals come in different variants, including IB IL 24 DO4-PAC, IB IL 24 DO4-ME, and IB IL 24 DO4/EF-ECO. The specific variant chosen depends on the application requirements and is included in the scope of supply.
+
+Specifications:
+
+* Analog inputs: 4
+* Signal range: 4 mA to 20 mA
+* Connection technology: 2-conductor
+* Bus interface: Integrated in the module (Inline Block IO)
+* Connector types: 1, 2, 3, and 4-wire sensors or actuators",
+21,False,32.52000703699741,0.16139329400175484,4,0.9293306469917297,0.8556210100650787,0.99999999995,0.0,"The AXL SE RS485 EF supports various protocols, but the exact list is not specified in the provided context. However, according to the documentation for this device (Type = AXL SE RS485 EF, Item no. = 1507978), it can be inferred that it supports protocols such as transparent mode.
+
+I could not find specific information on other supported protocols in the provided context.",
+21,True,30.866248154998175,1.3317231709988846,4,0.9448421597480774,0.8772944808006287,0.9999999999666667,0.0,"The AXL SE RS485 EF supports various protocols, as specified in the documentation:
+
+- Various protocols supported
+- Pcs./Pkt. = 1 (Packet/Byte Count)
+
+Please note that the exact list of supported protocols is not explicitly stated in the provided context. However, it is mentioned that ""Various protocols supported"" and ""Pcs./Pkt. = 1"" are part of the specifications for this device.",
+22,False,43.20852567000111,0.1537613139989844,4,0.8682084679603577,0.9601503610610962,0.9999999999,0.0,"To exchange data using the Global Data Space (GDS) in PLCnext Technology, programs define variables as IN or OUT ports. These ports serve as end points for exchanging data with other components, such as program instances and I/O systems.
+
+Data exchange for IN ports and OUT ports occurs at the beginning and end of each task execution cycle. This ensures that data is stable and consistent during execution. Additionally, a data exchange is only implemented if the program instances are coupled via IN and OUT ports.
+
+The Global Data Space (GDS) acts as a central point for storing all exchanged data. All data is stored centrally in the GDS, ensuring seamless processing during data exchange between user programs, fieldbus systems, and system programs.
+
+In order to establish communication relationships between different programs, the program variables to be exchanged or process data of the I/O components are defined as IN or OUT ports. This enables data exchange between program instances that have been instantiated in different tasks.
+
+For example, Figure 2-22 'Example: Port communication with task 1 and task 2 buffer storage units' demonstrates the behavior of task 1 and task 2, showcasing system balancing and multicore system support.
+
+In summary, programs can exchange data using the Global Data Space by defining variables as IN or OUT ports, which enables data exchange between program instances that have been instantiated in different tasks. The GDS acts as a central point for storing all exchanged data, ensuring seamless processing during data exchange.",
+22,True,37.37106814600338,1.0423280530012562,4,0.8442108035087585,0.9054702520370483,0.9999999999,0.0,"To exchange data using the Global Data Space (GDS) in PLCnext Technology, programs can use the following methods:
+
+1.  Read from GDS: Programs can read data from the GDS by accessing the corresponding GDS variables. The GDS provides a centralized point for storing all data that is exchanged between programs.
+
+2.  Write to GDS: Similarly, programs can write data to the GDS by updating the corresponding GDS variables.
+
+3.  Update GDS Variables: Programs can update GDS variables directly without going through the Global Data Space. This approach ensures that each task always uses consistent values.
+
+4.  Use Common Classes: The common classes provided in PLCnext Technology provide easy access to system functions such as file operations, socket services, and threading. These classes can be used to exchange data between programs.
+
+5.  Use Fieldbus Manager: The fieldbus manager connects the implemented fieldbus for input and output process data with PLCnext Technology. It provides read and write access to the GDS.
+
+6.  DataLogger: The DataLogger transfers real-time data from the GDS to an SQL-based database for recording and storage.",
+23,False,35.4073643720003,0.17009280399724958,4,0.8690527081489563,0.9276801943778992,0.8333333332916666,0.8972746729850769,"A high CPU load in conjunction with frequent PROFINET disconnections may cause the outputs of the Axioline local bus to freeze, as mentioned in the context. This issue has been addressed by updating to firmware version 2019.0.4 LTS, 2019.6.3 or 2019.9 or higher.
+
+In more detail, this freezing is typically caused by a high CPU load and frequent PROFINET disconnections on systems running firmware versions 2019.6, 2019.3, or 2019.0 LTS. The issue can be resolved by applying the latest firmware updates to ensure compatibility with the specified versions.
+
+It's worth noting that restarting Axioline in cases where it was not starting sporadically has also been observed as a workaround for this issue, particularly when using firmware versions 2021.6 or 2021.9 and an Axioline Smart Element module. However, this is no longer necessary with the latest firmware updates.
+
+To avoid this freezing, ensure that your system is running on the latest firmware version recommended by Phoenix Contact.",
+23,True,32.72452752100071,1.2706802089996927,4,0.859724223613739,0.9278441071510315,0.8333333332916666,0.8972746729850769,"A high CPU load in conjunction with frequent PROFINET disconnections may cause the outputs of the Axioline local bus to freeze, specifically for firmware versions 2019.6, 2019.3, or 2019.0 LTS.
+
+**SPECIFICATIONS:**
+
+- Firmware version 2019.0.4 LTS, 2019.6.3 or 2019.9 or higher is recommended to resolve the issue.
+- The controller will be restarted during the firmware update, which may affect plant availability.
+- The error has been rectified in these newer firmware versions.
+
+**PROTOCOL/MODE INFORMATION:** I could not find protocol/mode information in the PLCnext documentation related to this specific issue.",
+24,False,25.832112003001384,0.1422902289996273,4,0.8166023171335502,0.8607198297977448,0.9999999999,0.0,"If a firmware update fails, you should first check that the latest template for firmware version 2025.0 LTS is selected in the PLCnext Engineer project. 
+
+Additionally, ensure that at least a firmware version 2022.0 LTS or newer is installed on the PLC, as older firmware versions will not accept the *.rauc firmware update file.
+
+If the update still fails, you can try downgrading the firmware to a compatible version and then resetting to 'Default setting type 1'. However, please note that an automatic restoration of all specific configurations cannot be guaranteed after downgrading.
+
+It is also recommended to refer to the PLCnext documentation for more detailed information on troubleshooting firmware updates.",
+24,True,32.20570085000145,1.1530307009998069,4,0.8379156589508057,0.9053168594837189,0.9999999999,0.0,"If a firmware update fails, try the following steps:
+
+1.  Restart the system and recheck the logs.
+2.  If the issue persists, attempt a manual restart of the firmware via SSH (/etc/init.d/plcnext restart).
+3.  If the above steps do not resolve the issue, perform a power reset of the controller or reboot the controller via SSH.
+
+**Specifications:**
+
+*   Firmware update failure may be caused by various factors such as network connectivity issues, corrupted configuration files, or hardware malfunctions.
+*   Regularly backing up configuration files and metadata can help prevent data loss in case of a firmware update failure.
+*   Refer to the PLCnext documentation for detailed instructions on troubleshooting and resolving firmware update failures.",
+25,False,14.737024506001035,0.1289932770014275,4,0.8365059494972229,0.8783724904060364,0.99999999995,0.0,"The Security Profile is a configuration feature that enables secure operation of the PLCnext Technology platform. When activated, it sets the system into a secure state by deleting projects, resetting nearly all configurations, and deactivating potentially insecure system services.
+
+This includes:
+
+* Deleting the project
+* Resetting nearly all configurations
+* Deactivating potentially insecure system services
+
+The Security Profile also allows for the activation or deactivation of certain system services via Web-Based Management (WBM) or through an app. These services include:
+
+* APP MANAGER
+* DATALOGGER
+* GRPC LO CAL SERVER
+* LINUX SYSLOG
+* MODBUS CLIENT TCP
+* NETLOAD LIMITER
+* OPCUA CLIENT
+* PLCNEXT STORE
+* PROFICLOUD
+* SOFTWARE UPDATE
+
+When the Security Profile is activated, the firewall configuration allows incoming and outgoing ICMP requests (ping). This requires a license as described in the topic 'Security Profiles' in the 'Security' section of https://www.plcnext.help.
+
+Activation of the Security Profile also enables certification by 'TÜV Süd' according to the security standard IEC 62443-4-2.",
+25,True,35.02797651899891,1.2887933630008774,4,0.8217172872175235,0.8473870754241943,0.9999999999,0.0,"The Security Profile is a minimum configuration feature set needed for an application after the first installation of a PLCnext device, which provides a secure-by-default configuration and includes various system services that can be activated or deactivated via WBM (Web-Based Management) or by an app. When the Security Profile is active, it reboots the system and sets it into a secure state, deleting projects, resetting nearly all configurations, and deactivating potentially insecure system services.
+
+**Specifications:**
+
+* Requires a license as described in the topic 'Security Profiles' in the 'Security' section of https://www.plcnext.help.
+* Includes the following system services that can be activated or deactivated:
+	+ APP MANAGER
+	+ DATALOGGER
+	+ GRPC LOCAL SERVER
+	+ LINUX SYSLOG
+	+ MODBUS CLIENT TCP
+	+ NETLOAD LIMITER
+	+ OPCUA CLIENT
+	+ PLCNEXT STORE
+	+ PROFICLOUD
+	+ SOFTWARE UPDATE",
+26,False,35.14417454199793,0.13988473600329598,4,0.8754066526889801,0.916043221950531,0.9999999999,0.0,"A PLCnext C++ program consists of three main structures:
+
+1.  Library: The library class is the smallest unit that can be downloaded and represents an *.so file (shared object). It serves as the foundation for creating a C++ program within the PLCnext Technology platform.
+2.  Component: The component base class is a collection of functions (programs) within the PLCnext Technology platform. One 'component' can instantiate one or more 'programs', which interact via their shared 'component' instance.
+3.  Program: With PLCnext Technology, instances of the program base class can be performed in real-time. Here, the IN and OUT ports are published.
+
+These structures form the basis for creating a C++ application using the Phoenix Contact SDK.",
+26,True,46.60226755900294,1.0991016439984378,4,0.8805233836174011,0.8365420699119568,0.9999999999,0.0,"A PLCnext C++ program typically consists of the following components:
+
+1.  **Main Function**: The main function serves as the entry point for the program, where execution begins.
+2.  **Includes and Definitions**: Include necessary header files and define constants, macros, or variables used throughout the program.
+3.  **Global Variables**: Declare global variables that are shared among functions or classes.
+4.  **Class Definitions**: Define classes that encapsulate data and methods for performing specific tasks.
+5.  **Function Definitions**: Implement functions that perform operations such as reading inputs, writing outputs, or executing control logic.
+
+Here's a basic example of a PLCnext C++ program structure:
+
+```cpp
+#include <PLCnext.h>
+
+// Include necessary header files
+
+int main() {
+    // Initialize the PLCnext library and set up the controller
+    PLCnext::init();
+    PLCnext::setController(""controller_name"");
+
+    // Define global variables or constants
+    const int inputPin = 0;
+    const int outputPin = 1;
+
+    // Create a class to encapsulate data and methods
+    class MyClass {
+    public:
+        void readInput() {
+            // Read input from the specified pin
+        }
+
+        void writeOutput() {
+            // Write output to the specified pin
+        }
+    };
+
+    // Create an instance of the class
+    MyClass myInstance;
+
+    // Call functions or methods within the class
+    myInstance.readInput();
+    myInstance.writeOutput();
+
+    // Return from the main function
+    return 0;
+}
+```
+
+**Specifications:**
+
+*   **PLCnext Version:** This structure applies to PLCnext versions 2025.0 and later.
+*   **Controller Initialization:** The `PLCnext::init()` function initializes the PLCnext library, while `PLCnext::setController(""controller_name"")` sets up the controller for use in the program.
+*   **Global Variables:** Global variables can be declared using the `const int` syntax or other data types supported by C++.
+
+**Note:** This is a simplified example and may not represent the full structure of a PLCnext C++ program, which can vary depending on specific requirements and configurations.",
+27,False,,,,,,,,,"HTTPConnectionPool(host='localhost', port=5000): Read timed out. (read timeout=180)"
+27,True,8.454086817000643,1.182889964999049,4,0.8770807087421417,0.8890753984451294,0.9999999999,0.8238601982593536,"To find Inline terminals for use in Zone 2 potentially explosive areas, refer to the following resources:
+
+1. Check the Phoenix Contact website at phoenixcontact.net/products for the latest documentation on approved Inline terminals.
+2. Visit phoenixcontact.com/products to download the relevant application note and installation notes.
+3. Ensure you have the most recent version of the documentation, as specifications and approvals may change over time.
+
+Please note that only specifically approved Inline terminals should be used in Zone 2 potentially explosive areas. Always verify the terminal's approval for installation in this area before use.",
+28,False,26.297403847998794,0.15127680700243218,4,0.9229668974876404,0.9469141364097595,0.99999999995,0.0,"To resolve the 'Bad Gateway 502' WBM error, follow these steps:
+
+1.  Check the PLCnext system firmware startup process: Ensure that the firmware has started up properly. If not, refer to the PLCnext documentation for troubleshooting guides specific to your controller model.
+2.  Firmware downgrade: After downgrading the firmware, it is recommended to reset to 'Default setting type 1'. This step is optional when updating the firmware and should be performed only if necessary.
+
+For further assistance or clarification on any of these steps, please refer to the PLCnext documentation for your specific controller model.",
+28,True,29.306283636000444,1.3362103190011112,4,0.9429293870925903,0.9416721761226654,0.99999999995,0.0,"To resolve the 'Bad Gateway 502' WBM error, you need to restart the PLCnext system firmware. This error typically occurs when the firmware has not started up properly.
+
+**Specifications:**
+
+- PLCnext System Firmware Version: 2019.0 LTS or later
+- SDK Version: 2019.3 or later (for C++ projects)
+- WBM (Web-Based Management) version: 1.2.0 or later
+
+**Action Steps:**
+
+1.  Restart the PLCnext system firmware.
+2.  Check if the issue persists after restarting the firmware.
+
+If you are still experiencing issues, please provide more context or details about your setup and configuration.",
+29,False,,,,,,,,,"HTTPConnectionPool(host='localhost', port=5000): Read timed out. (read timeout=180)"
+29,True,36.336864347998926,2.0306849920016248,4,0.8823996782302856,0.9677156209945679,0.8333333332916666,0.0,"Yes, you can integrate Axioline Smart Elements into systems with the Smart Element interface.
+
+The Axioline F backplane is intended for use in a station that is opened by an Axioline F bus coupler or an Axiocontrol. Depending on type, the backplane has six or four 'Smart Element Interface' slots for accepting Axioline Smart Elements.",
+30,False,29.819031528000778,0.15933318799943663,4,0.9625975489616394,0.9477638602256775,0.8333333332916666,0.0,"The ambient temperature limits for Inline terminals are as follows:
+
+- Maximum permissible ambient temperature: 55°C
+- The maximum permissible ambient temperature decreases at elevations above 3000 m up to 5000 m.
+- At an elevation greater than 3000 m, the temperature derating should be considered.
+
+Please note that these limits apply to the Inline ECO terminals as well.",
+30,True,35.24926147599763,1.3511213300007512,4,0.9234917163848877,0.9286688268184662,0.8333333332916666,0.0,"The maximum permissible ambient temperature for Inline terminals decreases at elevations above 3000 m. According to Figure A-1, the derating of the permissible ambient temperature depending on the operating elevation is as follows:
+
+Maximum ambient temperature (operation) in °C
+h [m] Elevation in m
+Safe grounding
+Order of the terminals
+
+For elevations up to 3000 m, the maximum ambient temperature limit is not specified. However, for elevations above 3000 m up to 5000 m, the permissible ambient temperature should be kept in mind when using the terminals.
+
+The Inline ECO terminals are approved for operation within a temperature range of 0°C to +55°C.",

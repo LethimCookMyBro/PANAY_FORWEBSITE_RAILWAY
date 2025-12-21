@@ -1,0 +1,95 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: plcnext-chatbot-postgres-1
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: plcnextdb
+    volumes:
+      - plcnext-data:/var/lib/postgresql/data
+      - ./pgvector-init:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d plcnextdb || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: plcnext-chatbot-ollama-1
+    environment:
+      - OLLAMA_NUM_PARALLEL=1
+      - OLLAMA_MAX_LOADED_MODELS=1
+      - OLLAMA_KEEP_ALIVE=-1       # ⚡ เก็บ model ไว้ตลอด ไม่ unload!
+      - OLLAMA_HOST=0.0.0.0:11434
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11435:11434"
+    restart: unless-stopped
+    # ⚡ GPU support
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  backend:
+    build: ./backend
+    container_name: plcnext-chatbot-backend-1
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./backend:/app
+      - "/mnt/d/65160250/NSC/plc_data/data/raw:/app/data/raw"
+      - "/mnt/d/65160250/NSC/plc_data/data/Knowledge:/app/data/Knowledge"
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5000", "--workers", "1"]
+    env_file:
+      - ./.env
+    environment:
+      UVICORN_LOOP: asyncio
+      ANYIO_BACKEND: asyncio
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+
+  frontend:
+    build: ./frontend
+    container_name: plcnext-chatbot-frontend-1
+    environment:
+      VITE_API_URL: http://localhost:5000
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_started
+
+volumes:
+  plcnext-data:
+  ollama_data:

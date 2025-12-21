@@ -1,0 +1,154 @@
+"Comprehensive Summary of the PLCnext Technology Starterkit (Phoenix Contact - 1188165)
+The PLCnext Technology Starterkit offered by Phoenix Contact is a powerful and compact solution designed to give users hands-on experience with the core features and capabilities of the PLCnext ecosystem. This kit is ideal for those who want to experiment with industrial automation applications, software integration, and networked control systems without committing to a full-scale deployment.
+
+The starterkit includes a complete, ready-to-use setup with pre-installed components. These components are tailored to allow quick prototyping, educational use, and early development testing. It brings together the flexibility of open-source environments with the reliability and real-time performance expected from industrial PLC systems."
+"Key Features and Benefits 
+1.Rapid Development: Multiple developers can work concurrently using different programming languages, increasing productivity and streamlining collaboration across disciplines.
+
+2.Flexible Programming Environments: Users can work with their preferred development tools, such as traditional IEC 61131-3 environments or high-level languages like C++ or Python.
+
+3.Real-time Performance: The system ensures deterministic real-time behavior and data consistency, even when high-level and model-based code is involved.
+
+4.Openness and Adaptability: The kit is designed for limitless expansion through easy integration of open-source software, downloadable apps, and future technologies.
+
+5.Cloud Integration: With built-in networking and support for modern communication protocols, the starterkit enables cloud connectivity and intelligent system networking.
+
+6.Hands-on Testing: The included hardware and software allow users to simulate real-world industrial scenarios, making it an ideal tool for experimentation and training."
+"Contents of the Starterkit
+1.AXC F 2152 – PLCnext Controller (Part No. 2404267):
+A powerful dual-core controller designed for the direct control of Axioline F I/Os.
+Includes two Ethernet interfaces.
+Comes complete with a connector and bus base module.
+
+2.AXL F BP SE4 – Axioline F Module Carrier (Part No. 1088135):
+Backplane carrier with 4 slots for Axioline Smart Elements.
+Supports 100 Mbps local bus speed.
+IP20 protection rating.
+
+3.AXL SE AI4 U 0-10 – Analog Input Module (Part No. 1088104):
+Axioline Smart Elements analog module.
+4 analog inputs ranging from 0 to 10 V.
+2-conductor connection technology.
+IP20 protection.
+
+4.AXL SE DI16/1 – Digital Input Module (Part No. 1088127):
+16 digital inputs at 24 V DC.
+Uses 1-conductor connection technology.
+IP20 protection.
+
+5.AXL SE DO16/1 – Digital Output Module (Part No. 1088129):
+16 digital outputs at 24 V DC.
+1-conductor technology.
+IP20 protection.
+
+6.Human-Machine Interface (HMI) Elements:
+Slide potentiometer and push buttons are included for interactive input.
+These components help simulate user interactions in test applications.
+
+7.Power Supply Unit and Patch Cables:
+Ensures reliable operation of the entire starterkit.
+Necessary accessories included for immediate setup and use."
+"Product Information and Logistics
+1.Item Number: 1188165
+2.GTIN: 4063151233426
+3.Sales Key: DT04
+4.Product Key: DTHDBA
+5.Weight (with packaging): 2.48 g
+6.Weight (without packaging): 2.087 g
+7.Country of Origin: Germany
+8.Customs Tariff Number: 85371091"
+"Applications and Use Cases
+1.This starterkit is perfect for:
+2.Training and Education: Introducing students or new engineers to industrial control systems.
+3.Prototyping: Quickly testing application logic and new hardware setups.
+4.Software Development: Developing and testing custom PLC logic or applications that run on open-source environments.
+5.Cloud-Enabled Projects: Designing IoT-ready systems with cloud connectivity and modern protocols."
+"Phoenix Contact’s PLCnext Technology Starterkit is a cutting-edge solution that bridges the gap between traditional automation and the next generation of Industry 4.0-enabled systems. It emphasizes openness, flexibility, and performance, providing a future-proof platform for innovation. The combination of industrial-grade hardware, open development environments, and support for high-level languages makes it a unique offering for developers, engineers, and educators alike.
+Whether you're exploring digital transformation, developing smart factory prototypes, or educating the next wave of automation professionals, this starterkit offers a practical, scalable, and robust entry point into the world of modern industrial automation."
+"Comprehensive Summary of the PLCnext Technology Starterkit and Its Architecture
+Introduction to PLCnext Technology
+PLCnext Technology is Phoenix Contact’s innovative and forward-thinking response to the changing demands of the industrial automation sector. As industries shift towards smarter, interconnected, and cloud-integrated environments, traditional programmable logic controllers (PLCs) must evolve. PLCnext Technology bridges the gap between conventional PLC environments and the open, collaborative development world of high-level programming languages, cloud systems, and real-time control.
+
+PLCnext provides the openness of a Linux-based platform with real-time capabilities and combines multiple programming languages such as IEC 61131-3, C++, C#, and MATLAB® Simulink®. It allows developers from different domains to work in parallel, thus reducing development time while increasing flexibility and scalability."
+"What’s Inside the PLCnext Technology Starterkit (Order No. 1188165)
+This starter kit is purpose-built to allow new users, educators, and engineers to explore the capabilities of PLCnext Technology through a pre-assembled, plug-and-play development environment. The kit includes:
+
+AXC F 2152 Controller: The brain of the system, featuring two Ethernet ports and compatibility with Axioline F I/O systems.
+
+AXL F BP SE4: A modular backplane for Axioline Smart Elements with four slots.
+
+I/O Modules:
+AXL SE AI4 U 0-10 (Analog Input)
+AXL SE DI16/1 (Digital Input)
+AXL SE DO16/1 (Digital Output)
+
+Accessories: Push buttons, a slide potentiometer, power supply, patch cables, and covers.
+
+These components are all designed to work together seamlessly and to be fully programmable using PLCnext-compatible software."
+"Benefits and Key Features
+1.Multi-language programming: Parallel programming using C/C++, C#, IEC 61131-3, and Simulink.
+2.Real-time determinism: Guaranteed real-time data consistency regardless of language.
+3.Modularity: Component-based architecture with clear separation of system and user logic.
+4.Scalability: Easily expandable via additional modules or external devices.
+5.Cloud Integration: Built-in PROFICLOUD support for remote data access, predictive maintenance, and analytics.
+6.Open Source-Friendly: Supports use of community-driven packages, services, and libraries.
+7.Cross-platform engineering tools: Compatible with Visual Studio®, Eclipse®, and PC Worx Engineer."
+"Architecture and System Design
+PLCnext Technology runs on a Linux-based operating system enhanced for real-time operations. Its architecture is divided into several critical core components:
+
+1.Middleware (GDS - Global Data Space):
+Facilitates seamless data exchange between tasks and programs.
+Ensures synchronization across different programming languages and tasks.
+IN and OUT ports control how data flows between modules, ensuring consistency even in multi-task/multi-core scenarios.
+
+2.ESM (Execution and Synchronization Manager):
+Manages and synchronizes real-time tasks.
+Supports multicore CPUs by allocating separate ESMs per core.
+Works with IEC, C++, and Simulink programs in unified task cycles.
+
+3.System and Service Components:
+System Manager, PLC Manager, OPC UA server, Web-based Management (WBM), VPN, SSH, NTP, and firewall services.
+Service components also enable secure communication, remote diagnostics, and performance monitoring.
+
+4.Application Control Framework (ACF) and Program Library Manager (PLM):
+ACF loads and manages user-defined firmware components.
+PLM instantiates runtime libraries (.so) and assigns them to ESM tasks.
+
+5.Remote Service Calls (RSC):
+Allows communication between internal user components and core services.
+Can be used to read/write GDS data, access fieldbus devices (Axioline, PROFINET), or retrieve system states."
+"Programming and Development Tools
+1.C++ Development:
+Phoenix Contact offers an Eclipse add-in and an SDK.
+Developers use metafiles (*.libmeta, *.compmeta, *.progmeta) to define ports and configurations.
+Code is compiled into shared libraries and loaded onto the controller.
+
+2.C# Programming:
+Integrated via a Visual Studio® extension.
+C# libraries are converted into firmware components and used like traditional IEC blocks.
+
+3.Simulink Models:
+Engineers can model, simulate, and deploy MATLAB® Simulink® designs directly on PLCnext hardware using the “PC WORX TARGET FOR SIMULINK”.
+
+4.Configuration Options:
+Can be done via PC Worx Engineer or manually through XML files (*.acf.config, *.gds.config, *.esm.config).
+Allows manual extension and custom configuration using SFTP and standard text editors."
+"Networking and Security
+1.Network security is crucial. The system supports:
+SSH/SFTP for secure file access
+VPN for remote management (mGuard appliances recommended)
+Firewall and IPsec protocols (StrongSwan)
+
+2.Users are advised to disable unused services and protect access using role-based authentication."
+"Compliance and Certifications
+1.RoHS & REACH: Compliant with EU environmental and safety regulations.
+2.GTIN: 4063151233426
+3.Tariff Code: 85371091
+4.Country of Origin: Germany"
+"Use Cases and Applications
+The PLCnext Technology Starterkit is suited for:
+1.Educational Training: Ideal for teaching modern control systems, real-time programming, and industrial networking.
+2.Prototype Development: Rapid prototyping of automation and IIoT solutions.
+3.Smart Manufacturing: Integrating machine learning models, real-time analytics, and cloud data streams into factory operations.
+4.Multi-disciplinary Collaboration: Software teams, hardware engineers, and data scientists can contribute to a unified solution simultaneously."
+"The Phoenix Contact PLCnext Technology Starterkit is more than just a development platform—it's a vision for the future of industrial automation. It enables cross-functional teams to build sophisticated, cloud-connected control systems that meet the growing demands of Industry 4.0. With its robust modular architecture, rich programming support, and powerful real-time capabilities, the starterkit is the perfect entry point into the PLCnext ecosystem. Whether you're an automation professional, a software engineer, or an educator, PLCnext offers an open, scalable, and secure platform tailored to modern engineering challenges."

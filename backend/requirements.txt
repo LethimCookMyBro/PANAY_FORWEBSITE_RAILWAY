@@ -1,0 +1,58 @@
+# ---- FastAPI
+fastapi==0.111.0
+uvicorn==0.30.1
+httptools==0.6.4
+
+# ---- DB & Vector
+psycopg2-binary==2.9.9
+pgvector==0.2.5
+
+# ---- LangChain stack
+langchain>=0.2.0
+langchain-community>=0.2.0
+langchain-core>=0.2.0
+langchain-ollama>=0.1.0
+langchain-text-splitters
+langgraph
+flashrank
+sentence-transformers
+requests
+
+# ---- Loaders & utils
+langchain-docling
+pypdf
+python-dotenv
+python-multipart
+
+# ---- Whisper
+faster-whisper
+soundfile
+
+# ---- OCR
+pytesseract
+Pillow
+typhoon-ocr
+
+# ---- RAGAS & friends
+ragas==0.2.10
+datasets>=2.19.0
+pandas>=2.1
+tqdm
+matplotlib
+openai>=1.40.0
+langchain-openai>=0.2.0
+langchain-huggingface>=0.1.0
+scikit-learn>=1.4
+
+# ---- PDF
+PyMuPDF
+
+# ---- Word
+python-docx
+
+# ---- authentication
+passlib[bcrypt]==1.7.4
+bcrypt==3.2.2
+python-jose[cryptography]
+python-multipart
+email-validator

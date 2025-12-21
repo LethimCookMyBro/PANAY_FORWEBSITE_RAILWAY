@@ -1,0 +1,354 @@
+[
+
+  {
+  "category": "basic",
+  "question": "What is the main advantage of PLCnext?",
+  "context": "PLCnext offers an open and flexible automation platform. Engineers can choose the best programming language for the task, combine existing code, and integrate open-source software. This significantly speeds up application development.",
+  "answer": "The main advantage is its openness and flexibility, allowing engineers to use the best programming language for the task, combine existing code, and integrate open-source software, which significantly speeds up application development.",
+  "source": "PLCnext official documentation"
+},
+  {
+    "category": "troubleshooting",
+    "question": "Cannot warm start PLC with AXC F 3152",
+    "context": "User is using AXC F 3152 with HW version 3 and FW version 2025.0.3. Gets error 'Arp.Plc.Domain.Plc.Condition.Failed' when trying to start PLC. Error message shows 'Starting Plc is prevented by 'Arp.Hardware.DeviceHmi' because of 'Start/Stop switch'.",
+    "answer": "The issue is likely caused by the Start/Stop switch position. Check that the switch is set to 'Start' position (not 'Stop'). The hardware device HMI is preventing the PLC from starting due to the switch configuration.",
+    "source": "PLCnext Forum - User dimitrismvm"
+},
+  {
+  "category": "troubleshooting",
+  "question": "How do I reset this PLC back to factory default settings?",
+  "context": "Phoenix Contact PLCnext PLC with visible MRESET switch on selector (SD card/RUN/STOP/MRESET). User wants to perform complete factory reset. PLC model appears to be from AXC F series based on interface design.",
+  "answer": "Based on the image, your PLC has an MRESET (Memory Reset) switch which is the primary method for factory reset:\n\n**Method 1: Using MRESET Switch (Recommended)**\n1. Turn selector switch to STOP position and wait 5-10 seconds\n2. Turn switch to MRESET position and hold for 5-10 seconds until LEDs flash\n3. Return switch to STOP position\n4. Power cycle: turn off PLC, wait 10 seconds, turn back on\n\n**⚠️ CRITICAL WARNING:** Factory reset will DELETE ALL data including:\n- User programs\n- Retain variables\n- IP configuration\n- Passwords\n- All settings\n\n**BACKUP your project first!**\n\n**Method 2: PLCnext Engineer Software**\n1. Open PLCnext Engineer and connect to PLC\n2. Right-click on device → Select 'Reset to Factory Settings' or 'Format User Partition'\n3. Confirm and wait for completion\n\n**Method 3: Network Configuration Reset**\nVia SSH/Console: `dcp reset` (Note: This typically resets ONLY network settings, not full factory reset)\n\nAfter reset, you'll need to reload your program, reconfigure IP addresses, reset passwords, and reconfigure I/O modules.",
+  "source": "PLCnext Hardware Manual - MRESET function & Phoenix Contact documentation"
+},
+  {
+    "category": "specification",
+    "question": "What is the firmware version compatibility for AXC F 3152?",
+    "context": "AXC F 3152 controller supports various firmware versions. Users report working with FW version 2025.0.3 (25.0.3.103) with HW version 3.",
+    "answer": "The AXC F 3152 is compatible with firmware version 2025.0.3 (25.0.3.103) when using hardware version 3.",
+    "source": "PLCnext Forum - User dimitrismvm"
+  },
+  {
+    "category": "error_resolution",
+    "question": "How to resolve Arp.Plc.Domain.Plc.Condition.Failed error?",
+    "context": "Error occurs during PLC startup with message 'Starting Plc is prevented by 'Arp.Hardware.DeviceHmi' because of 'Start/Stop switch'. This typically happens when the physical switch is in wrong position.",
+    "answer": "To resolve this error: 1) Check the physical Start/Stop switch on the PLC unit, 2) Ensure the switch is in 'Start' position (not 'Stop'), 3) The switch position must match the software configuration, 4) If switch is correct, check HMI device configuration.",
+    "source": "PLCnext Forum - Community Solution"
+  },
+  {
+  "category": "usage",
+  "question": "How can I send data from a PLCnext device to InfluxDB?",
+  "context": "User is trying to send data to InfluxDB from PLCnext. They are using a Python script via REST API and need guidance on data format and connection.",
+  "answer": "To send data from PLCnext to InfluxDB, use the InfluxDB line protocol format and send HTTP POST requests to the write endpoint of your InfluxDB instance (e.g. http://<ip>:8086/write?db=mydb). Ensure proper headers and payload formatting. You can use Python libraries like 'requests' to send data from PLCnext Linux environment.",
+  "source": "PLCnext Forum - User mazen.mohsen"
+  },
+  {
+  "category": "troubleshooting",
+  "question": "Why can't I warm start my AXC F 3152 PLC?",
+  "context": "User with AXC F 3152 HW v3 and FW 2025.0.3 faces error 'Arp.Plc.Domain.Plc.Condition.Failed' and 'Start/Stop switch' is mentioned.",
+  "answer": "The Start/Stop switch on the PLC might be set to 'Stop'. Ensure the switch is in 'Start' position. The error message indicates that the hardware device HMI prevents startup due to the switch state.",
+  "source": "PLCnext Forum - User dimitrismvm"
+  },
+  {
+  "category": "software_tools",
+  "question": "How to configure VS Code for C++ development on PLCnext Linux?",
+  "context": "User wants to use VS Code on AXC F 2152 for C++ with 2025.0 toolchain and includes custom libraries.",
+  "answer": "You can configure VS Code with CMake and Remote-SSH to edit and build C++ code on a PLCnext controller. Make sure to use the correct toolchain file provided in /opt/plcnext/2025.0/toolchain.cmake, and set the CMAKE_PREFIX_PATH to include your 3rd party libraries.",
+  "source": "PLCnext Forum - User johannes.schumacher"
+  },
+  {
+  "category": "error_handling",
+  "question": "Why do I get unexpected behavior after updating firmware on AXC F 2152?",
+  "context": "User updated to 2025.0.2 firmware and faced issues like stopped ACF components.",
+  "answer": "Firmware updates may reset configuration files or dependencies. After updating to 2025.0.2, verify that all ACF components are re-registered and compatible with the new firmware. Restart the system and recheck the logs.",
+  "source": "PLCnext Forum - User yyz123"
+  },
+  {
+  "category": "programming",
+  "question": "How can I parse XML config files in PLCnext using 2025.0.2?",
+  "context": "User uses C# with System.Xml.XmlReader and gets format errors.",
+  "answer": "Ensure the XML file encoding is UTF-8 and well-formed. PLCnext supports .NET Core and System.Xml namespaces, but malformed XML can trigger parsing exceptions. Use try-catch blocks and validate XML structure beforehand.",
+  "source": "PLCnext Forum - User linuxdebugger"
+  },
+  {
+  "category": "programming",
+  "question": "How can I compile and share a native C++ project on PLCnext with the 2025.0 toolchain?",
+  "context": "User is trying to share a native C++ project across multiple developers using the 2025.0 toolchain on Linux.",
+  "answer": "To share a native C++ project, use a common CMakeLists.txt and include the PLCnext-provided toolchain file. Store shared dependencies and include paths in version-controlled folders, and make sure to align toolchain paths across systems for compatibility.",
+  "source": "PLCnext Forum - User karlo"
+  },
+  {
+  "category": "software_tools",
+  "question": "How can I use plcncli with external 3rd party libraries using CMAKE_PREFIX_PATH?",
+  "context": "User needs to include external libraries such as libxml2 into the build process using plcncli and cmake.",
+  "answer": "You can use the CMAKE_PREFIX_PATH environment variable to point to directories containing external libraries. Ensure that the CMakeLists.txt uses `find_package` correctly and the toolchain file is configured to locate these libraries.",
+  "source": "PLCnext Forum - User jpl"
+  },
+  {
+  "category": "usage",
+  "question": "How can I load and execute a custom ACF component in PLCnext Engineer?",
+  "context": "User has a compiled ACF component and wants to load and test its execution using PLCnext Engineer.",
+  "answer": "To load a custom ACF component in PLCnext Engineer, you need to deploy the binary to the target device, register it in the ACF configuration, and ensure it is listed under Component Manager. Restart the controller and verify its execution using log messages or status indicators.",
+  "source": "PLCnext Forum - User vmasoudnia"
+  },
+  {
+  "category": "programming",
+  "question": "How to handle time data correctly in a PLCnext application?",
+  "context": "User needs to process and format timestamps inside a PLCnext app for logging and visualization.",
+  "answer": "Use the standard time library in C++ (e.g., `<chrono>` or `time.h`) or PLCnext APIs to handle time-related operations. Be aware of timezone settings and consider using UTC for consistent data handling across systems.",
+  "source": "PLCnext Forum - User j.kluger"
+  },
+  {
+  "category": "connectivity",
+  "question": "How can I acquire GPS data from a TC Router and send it to a PLCnext controller?",
+  "context": "User is using a TC Router with GPS capabilities and wants to forward GPS data to a PLCnext device.",
+  "answer": "TC Router can forward GPS data over TCP or UDP using its internal GPS service. On the PLCnext side, implement a socket listener to receive the GPS NMEA sentences and parse them as needed. Ensure ports are open and protocol settings match.",
+  "source": "PLCnext Forum - User samuel.martin"
+  },
+  {
+"category": "Core Concepts",
+"reference_question": "What is PLCnext Technology?",
+"reference_answer": "PLCnext Technology is an **open firmware platform** based on a **Linux operating system with a real-time patch**, designed for automation applications. It allows the combination of traditional PLC programming (IEC 61131-3) with high-level languages like C++ and MATLAB Simulink, enabling seamless data exchange through its Global Data Space (GDS) and real-time execution via the Execution and Synchronization Manager (ESM).",
+"variation_a": "Describe PLCnext Technology's core.",
+"variation_b": "What defines PLCnext?"
+},
+{
+"category": "AXC F",
+"reference_question": "What is the AXC F 2152 controller?",
+"reference_answer": "The AXC F 2152 (item no. 2404267) is a **fast, robust, and easy-to-use controller** designed for maximum performance in harsh industrial environments. It integrates **Ethernet and Axioline F local bus connections** and serves as the head of an Axioline F station, capable of being extended with modules on both its right and left sides.",
+"variation_a": "Tell me about AXC F 2152.",
+"variation_b": "What are the capabilities of the AXC F 2152?"
+},
+{
+"category": "Firmware Management",
+"reference_question": "How do I update AXC F 2152 firmware?",
+"reference_answer": "Firmware updates for the AXC F 2152 controller can be performed using the **Web Based Management (WBM)**, **Device and Update Management (DaUM)**, **OPC UA**, or the **RSC service IDeviceControlService::StartFirmwareUpdate()**. The Linux script 'update-plcnext' has been removed. When updating to firmware version 2023.0.0 LTS or newer, the PLC must have at least firmware version 2022.0 LTS or newer installed.",
+"variation_a": "What are the methods for AXC F 2152 firmware update?",
+"variation_b": "How to update AXC F 2152 software?"
+},
+{
+"category": "Firmware Management",
+"reference_question": "What is an LTS firmware version?",
+"reference_answer": "LTS stands for **Long-Term Support** in the context of AXC F 2152 firmware releases. These versions are specifically certified for use in **maritime applications** (e.g., 2024.0.0 LTS, 2023.0.0 LTS, 2022.0.4 LTS, 2022.0.3 LTS, 2021.0.3 LTS, 2020.0.1 LTS, 2020.0 LTS, 2019.0.4 LTS, 2019.0 LTS).",
+"variation_a": "Define LTS firmware.",
+"variation_b": "What does LTS mean for AXC F 2152 firmware?"
+},
+{
+"category": "Smart Elements",
+"reference_question": "What is AXL SE DO16/1?",
+"reference_answer": "The AXL SE DO16/1 (item no. 1088129) is an **Axioline Smart Elements digital output module** with 16 digital outputs, operating at 24V DC with a maximum output current of 500mA per channel. It uses **1-conductor push-in connection technology** and has IP20 degree of protection.",
+"variation_a": "Describe the AXL SE DO16/1 module.",
+"variation_b": "What are the features of AXL SE DO16/1?"
+},
+{
+"category": "Inline Terminals",
+"reference_question": "What is an Inline ECO terminal?",
+"reference_answer": "Inline ECO terminals are **inexpensive and simple terminals** that provide basic functionality within the Inline product range. They typically **do not require parameterization** for digital and analog input/output functions and operate within a limited temperature range of **0 °C to 55 °C**.",
+"variation_a": "Tell me about ECO terminals.",
+"variation_b": "What are the characteristics of Inline ECO?"
+},
+{
+"category": "Serial Communication",
+"reference_question": "What protocols does AXL SE RS485 EF support?",
+"reference_answer": "The AXL SE RS485 EF supports several serial data protocols: **Transparent protocol**, **End-to-end protocol**, **Modbus/RTU (client support)**, and **Modbus/RTU (server support)**.",
+"variation_a": "Which serial protocols are supported by AXL SE RS485 EF?",
+"variation_b": "What communication modes does the AXL SE RS485 EF have?"
+},
+{
+"category": "GDS",
+"reference_question": "How do programs exchange data using GDS?",
+"reference_answer": "Programs exchange data with each other, fieldbus systems, and system programs via the **Global Data Space (GDS)**, which acts as a central storage point. Data is written to the GDS via **OUT ports** and read from it via **IN ports**. A single OUT port can be connected to multiple IN ports, but an IN port can only connect to one OUT port.",
+"variation_a": "Explain GDS data exchange.",
+"variation_b": "Describe data flow with Global Data Space."
+},
+{
+"category": "PROFINET",
+"reference_question": "What causes Axioline local bus outputs to freeze?",
+"reference_answer": "A high CPU load in conjunction with frequent PROFINET disconnections could cause the outputs of the Axioline local bus to **freeze**. This issue was observed with firmware versions 2019.6, 2019.3, or 2019.0 LTS, and a firmware update to 2019.0.4 LTS, 2019.6.3, 2019.9 or higher is recommended to fix it.",
+"variation_a": "Why do Axioline outputs freeze?",
+"variation_b": "What leads to frozen Axioline local bus outputs?"
+},
+{
+"category": "Troubleshooting",
+"reference_question": "What to do if firmware update fails?",
+"reference_answer": "If a firmware update does not start correctly, the controller can be restarted via **SSH (`/etc/init.d/plcnext restart`)**, by **rebooting the controller via SSH**, or by performing a **power reset** of the controller. If the PLCnext system firmware has not started up properly, the WBM may display a \"Bad Gateway 502\" error message.",
+"variation_a": "My firmware update didn't work. What next?",
+"variation_b": "How to fix a failed firmware restart?"
+},
+{
+"category": "Security",
+"reference_question": "What is the security profile feature?",
+"reference_answer": "A **'Security Profile' can be activated via WBM**, which requires a license. Activating it reboots the PLC into a **secure state**, involving the deletion of the project, resetting configurations, and deactivating potentially insecure system services. This feature supports certification according to the **IEC 62443-4-2** security standard.",
+"variation_a": "Tell me about the security profile.",
+"variation_b": "How does the security profile work?"
+},
+{
+"category": "Programming C++",
+"reference_question": "What is the structure of a PLCnext C++ program?",
+"reference_answer": "A PLCnext C++ program is structured hierarchically, comprising a **Library**, a **Component**, and one or more **Programs**. The Library represents the downloadable shared object (`.so` file), the Component is a collection of functions (programs) within the platform, and the Program instances are the real-time executable units where IN and OUT ports are published.",
+"variation_a": "Outline C++ program organization in PLCnext.",
+"variation_b": "How are C++ applications structured in PLCnext?"
+},
+{
+"category": "Approvals/Certifications",
+"reference_question": "How to find Inline terminals for Zone 2 explosive areas?",
+"reference_answer": "To find Inline terminals approved for **Zone 2 potentially explosive areas**, you can visit **phoenixcontact.net/products**. First, enter 'IL' into the search window, then open the 'Approval' filter, select the desired approval (e.g., ATEX and/or IECEx), and confirm with 'Apply' to get a list of modules.",
+"variation_a": "Where are Zone 2 Inline terminal approvals located?",
+"variation_b": "What is the process to find Zone 2 approved Inline terminals?"
+},
+{
+"category": "Troubleshooting",
+"reference_question": "What to do for \"Bad Gateway 502\" WBM error?",
+"reference_answer": "A \"Bad Gateway 502\" error message on the Web Based Management (WBM) typically indicates that the **PLCnext system firmware has not started up properly**. The recommended solution is to **restart the controller** via SSH, reboot via SSH, or perform a power reset.",
+"variation_a": "How to resolve WBM 'Bad Gateway 502'?",
+"variation_b": "WBM displays 502 error, what's the fix?"
+},
+{
+"category": "Smart Elements",
+"reference_question": "Can I use Axioline Smart Elements in an Axioline F station?",
+"reference_answer": "Yes, you can integrate **Axioline Smart Elements** into an Axioline F station by means of an **Axioline F backplane**. The backplane accommodates either four or six Axioline Smart Elements, depending on its version.",
+"variation_a": "Is AXL SE compatible with Axioline F?",
+"variation_b": "How do I connect Smart Elements to Axioline F?"
+},
+{
+"category": "Inline Terminals",
+"reference_question": "What are the ambient temperature limits for Inline terminals?",
+"reference_answer": "Standard Inline terminals operate in an **ambient temperature range of -25°C to +55°C**. However, **XC versions** are designed for extended conditions, supporting **-40°C to +70°C**. Inline **ECO versions** have a limited operating temperature range of **0°C to +55°C**.",
+"variation_a": "What's the operating temperature for Inline modules?",
+"variation_b": "What temperature range do Inline terminals tolerate?"
+},
+{
+"category": "Firmware Management",
+"reference_question": "What happens if I downgrade firmware from 2025.0.2?",
+"reference_answer": "If you downgrade firmware from version 2025.0.2 (or newer) to version 2024.6 (or older), the **IP configuration may change** due to the Linux init system changing from SysV to systemd. Additionally, any system watchdog configuration set with firmware 2025.0 or newer will be **reset to default** (PLC remains in PlcState::Stop).",
+"variation_a": "Downgrading firmware 2025.0.2: what are the effects?",
+"variation_b": "What are the consequences of a firmware downgrade from 2025.0.2?"
+},
+{
+"category": "Programming C#",
+"reference_question": "How to create C# function blocks for PLCnext Technology?",
+"reference_answer": "To create C# function blocks for PLCnext Technology, you use **Visual Studio** with the **eCLR template 'Firmware Library'**. You then add a new item, selecting 'Function Block' or 'Function' from the 'Visual C# Items, eCLR' list. The project is compiled, generating a `.pcwlx` library.",
+"variation_a": "What are the steps for C# FB creation in PLCnext?",
+"variation_b": "Can you explain making C# function blocks for PLCnext?"
+},
+{
+"category": "GDS",
+"reference_question": "How do I define a GDS port for local bus process data?",
+"reference_answer": "For local bus process data, define the GDS port by entering the **name of the local bus controller** as the port, followed by the **module position** and the **process data name**. The format is `Local bus controller/module position:process data name`, for example: `Arp.Io.FbIo.AxlC/0:~DO8`.",
+"variation_a": "Local bus GDS port definition syntax?",
+"variation_b": "What is the format for local bus GDS ports?"
+},
+{
+"category": "Troubleshooting",
+"reference_question": "Where can I find known limitations and errors for AXC F 2152?",
+"reference_answer": "Known limitations and errors for the AXC F 2152 controller are documented in the **PLCnext Info Center**. This information can be found at the constantly updated overview provided at **https://www.plcnext.help/te/Known_issues.htm**.",
+"variation_a": "Is there a list of known issues for AXC F 2152?",
+"variation_b": "Where are AXC F 2152 bugs documented?"
+},
+{
+"category": "Factual",
+"reference_question": "What transmit FIFO size for AXL SE RS485 EF transparent protocol?",
+"reference_answer": "For the AXL SE RS485 EF in transparent protocol mode, the **transmit FIFO (first-in, first-out memory) can store 1023 bytes (1 kB)**. The receive FIFO for this protocol can store 4096 bytes (4 kB).",
+"variation_a": "Transmit buffer capacity for AXL SE RS485 EF transparent?",
+"variation_b": "How large is the transparent transmit FIFO on AXL SE RS485 EF?"
+},
+{
+"category": "Procedural",
+"reference_question": "How do I read counters for AXL SE RS485 EF interface diagnostics?",
+"reference_answer": "To read various counters for AXL SE RS485 EF interface diagnostics, you use the **'Read counters' command** by setting **OUT Word 0 to 3E00hex**. The response in the IN words will provide information such as the number of valid/invalid characters received, characters transmitted, unicast/broadcast telegrams, errors, timeouts, and checksum errors.",
+"variation_a": "What command reads AXL SE RS485 EF diagnostic counters?",
+"variation_b": "Explain how to check AXL SE RS485 EF interface counters."
+},
+{
+"category": "Scenario-Based",
+"reference_question": "What if an Inline AI terminal detects a wire break?",
+"reference_answer": "If an Inline Analog Input (AI) terminal, such as the IB IL AI 2/SF-PAC, detects a wire break, the input signal will typically **go to 0 V, 0 mA, or 4 mA**. For the 4 mA to 20 mA measuring range, a specific **wire-break message will appear in the process data** when the current is below 3.2 mA.",
+"variation_a": "How does an Inline AI respond to a broken wire?",
+"variation_b": "What are the indications of a wire break on an Inline AI?"
+},
+{
+"category": "AXC F",
+"reference_question": "What left-alignable modules are available for AXC F 2152?",
+"reference_answer": "Currently available left-alignable extension modules for the AXC F 2152 include the **AXC F XT ETH 1TX (Ethernet interface)**, **AXC F XT IB (INTERBUS master)**, **AXC F XT EXP (PCIe extension interface)**, **AXC F XT PB (PROFIBUS master)**, and **AXC F XT SPLC 1000 (safety-related controller)**, as well as the **AXC F XT ML 1000 (machine learning function)**. The AXC F XT SPLC 3000 is also in preparation.",
+"variation_a": "List AXC F 2152 left-alignable extensions.",
+"variation_b": "Which modules can be added to the left of AXC F 2152?"
+},
+{
+"category": "System Changes",
+"reference_question": "What is the 'system monitor' component?",
+"reference_answer": "A new firmware component called **'system monitor'** has been implemented to **monitor RAM and CPU load** on the AXC F 2152. If certain load levels are exceeded, it emits notifications, and upon further exceedance, the **'system watchdog' component is informed and activated**.",
+"variation_a": "Explain the new system monitor in firmware.",
+"variation_b": "What does the 'system monitor' do?"
+},
+{
+"category": "Security",
+"reference_question": "Are older OpenSSH SHA1 algorithms supported?",
+"reference_answer": "As part of the OpenSSH update from version \"8.4p.1\" to \"8.8p1\" (or newer), the **SHA1 DHE KEX algorithm will be disabled in a future firmware release**.",
+"variation_a": "Will SHA1 OpenSSH be supported in the future?",
+"variation_b": "Is OpenSSH SHA1 still active?"
+},
+{
+"category": "Diagnostics",
+"reference_question": "Where are diagnostic messages for PLCnext Technology stored?",
+"reference_answer": "Diagnostic log files, including status information, warnings, error messages, and debugging messages, are stored in the **`Output.log` file**. This file can be found in the **`/opt/plcnext/logs` folder** on the controller's file system, which can be accessed via the SFTP protocol.",
+"variation_a": "Location of PLCnext diagnostic logs?",
+"variation_b": "How to access PLCnext diagnostic files?"
+},
+{
+"category": "PDI Objects",
+"reference_question": "What is the purpose of the ResetDiag object?",
+"reference_answer": "The **`ResetDiag` object (0019hex)** is a standard PDI object used to **specify how a Smart Element should handle diagnostic messages**. It allows users to permit all diagnostic messages, delete and acknowledge pending messages, or delete, acknowledge, and prohibit new diagnostic messages.",
+"variation_a": "What does the `ResetDiag` object do?",
+"variation_b": "How is diagnostic message handling configured for Smart Elements?"
+},
+{
+"category": "DataLogger",
+"reference_question": "How has the DataLogger been improved in firmware 2021.6?",
+"reference_answer": "In firmware 2021.6, the **DataLogger has been extended to allow specifying the name of an ESM task**. This ensures that the values of all configured variables are sampled within that specific task, applying to resource-global variables, component ports, and variables instantiated within a program associated with any ESM task.",
+"variation_a": "What DataLogger enhancements are in 2021.6 firmware?",
+"variation_b": "Tell me about DataLogger improvements in firmware 2021.6."
+},
+{
+"category": "Factual",
+"reference_question": "What are the dimensions and weight of IB IL AI 2/SF-PAC?",
+"reference_answer": "The IB IL AI 2/SF-PAC terminal has dimensions of **12.2 mm width, 136.8 mm height, and 71.5 mm depth**. It has a weight of **69 g (with connector)**.",
+"variation_a": "What are the physical specs for IB IL AI 2/SF-PAC?",
+"variation_b": "Provide the size and mass of the IB IL AI 2/SF-PAC."
+},
+{
+"category": "HMI",
+"reference_question": "What happens to HMI pages during program downloads?",
+"reference_answer": "During a PLCnext Engineer program download (both total and changes), the **web server returns an error 503 (busy)** for requests to the HMI pages. This is a known limitation.",
+"variation_a": "Are HMI pages accessible during project download?",
+"variation_b": "HMI pages show error 503 during download. Why?"
+},
+{
+"category": "Programming (Simulink)",
+"reference_question": "What software is needed for MATLAB Simulink with PLCnext?",
+"reference_answer": "To use MATLAB Simulink for model-based development with PLCnext Technology, you need the **\"PC Worx Target for Simulink\" software add-on**. This add-on enables the conversion of Simulink models into PLCnext compatible code.",
+"variation_a": "Required software for Simulink in PLCnext?",
+"variation_b": "How to integrate Simulink with PLCnext?"
+},
+{
+"category": "Axioline F Modules",
+"reference_question": "What is the maximum number of devices in an Axioline F station?",
+"reference_answer": "An Axioline F station supports a **maximum of 63 devices**. Each Axioline F module and Axioline Smart Element counts as a device, and the total current consumption and bus coupler/controller limits must be considered.",
+"variation_a": "How many modules can an Axioline F station have?",
+"variation_b": "What's the device limit for Axioline F?"
+},
+{
+"category": "Troubleshooting (Retain Data)",
+"reference_question": "What are the retain data limitations for time-critical applications?",
+"reference_answer": "Using the **maximum quantity structures of retain data can increase the task duration** of the consuming task. This might potentially **trigger a task watchdog** for time-critical applications.",
+"variation_a": "Retain data and task watchdog: what's the risk?",
+"variation_b": "Can too much retain data cause issues in critical tasks?"
+},
+{
+"category": "Inline Terminals (IB IL SGI 2/F)",
+"reference_question": "How many process data words does IB IL SGI 2/F occupy?",
+"reference_answer": "The IB IL SGI 2/F(-2MBD)-PAC terminal **occupies three process data words** and one PCP word. Output word OUT0 contains the command, and OUT1/OUT2 contain parameters for channels.",
+"variation_a": "Process data usage for IB IL SGI 2/F?",
+"variation_b": "What is the process data word count for IB IL SGI 2/F?"
+}
+
+]
