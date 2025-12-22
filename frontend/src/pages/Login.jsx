@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-function Login({ onLogin }) {
+function Login({ onLogin, onGoRegister }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -12,16 +12,14 @@ function Login({ onLogin }) {
     setLoading(true);
 
     try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/login`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          email,
-          password,
-        }),
-      });
+      const res = await fetch(
+        `${import.meta.env.VITE_API_URL}/api/auth/login`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password }),
+        }
+      );
 
       if (!res.ok) {
         throw new Error("Invalid credentials");
@@ -38,10 +36,7 @@ function Login({ onLogin }) {
 
   return (
     <div className="h-screen flex items-center justify-center bg-gray-100">
-      <form
-        onSubmit={handleSubmit}
-        className="bg-white p-6 rounded shadow w-80"
-      >
+      <form className="bg-white p-6 rounded shadow w-80" onSubmit={handleSubmit}>
         <h2 className="text-xl font-bold mb-4 text-center">Login</h2>
 
         {error && (
@@ -75,6 +70,17 @@ function Login({ onLogin }) {
         >
           {loading ? "Logging in..." : "Login"}
         </button>
+
+        <p className="mt-4 text-sm text-center">
+          Don't have an account?{" "}
+          <button
+            type="button"
+            onClick={onGoRegister}
+            className="text-blue-600"
+          >
+            Register
+          </button>
+        </p>
       </form>
     </div>
   );

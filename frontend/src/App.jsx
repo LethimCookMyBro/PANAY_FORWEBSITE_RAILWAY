@@ -1,14 +1,18 @@
 import { useState, useEffect } from "react";
 import Chat from "./pages/Chat";
 import Login from "./pages/Login";
+import Register from "./pages/Register";
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState("login"); // login | register
 
   useEffect(() => {
     const token = localStorage.getItem("access_token");
-    setIsAuthenticated(!!token);
+    if (token) {
+      setIsAuthenticated(true);
+    }
     setLoading(false);
   }, []);
 
@@ -20,6 +24,7 @@ function App() {
   const handleLogout = () => {
     localStorage.removeItem("access_token");
     setIsAuthenticated(false);
+    setPage("login");
   };
 
   if (loading) {
@@ -30,14 +35,26 @@ function App() {
     );
   }
 
+  if (isAuthenticated) {
+    return <Chat onLogout={handleLogout} />;
+  }
+
   return (
-    <div className="h-screen w-screen">
-      {isAuthenticated ? (
-        <Chat onLogout={handleLogout} />
-      ) : (
-        <Login onLogin={handleLogin} />
+    <>
+      {page === "login" && (
+        <Login
+          onLogin={handleLogin}
+          onGoRegister={() => setPage("register")}
+        />
       )}
-    </div>
+
+      {page === "register" && (
+        <Register
+          onRegisterSuccess={() => setPage("login")}
+          onBackToLogin={() => setPage("login")}
+        />
+      )}
+    </>
   );
 }
 
