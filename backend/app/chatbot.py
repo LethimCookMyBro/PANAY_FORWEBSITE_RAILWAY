@@ -4,11 +4,15 @@
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import math
 import logging
 import re
 import time
+
+# Setup logging
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format='%(message)s')
 
 
 # ============================================================
@@ -21,6 +25,136 @@ ALPHA = 0.6
 HARD_MIN = 0.10
 SOFT_MIN = 0.15
 MAX_CANDIDATES = 5
+
+# RAGAS quality threshold - if average score below this, respond "I don't know"
+RAGAS_MIN_THRESHOLD = 0.40  # 40% minimum average quality
+
+# Questions matching these patterns skip RAGAS quality check (identity/greeting questions)
+SKIP_RAGAS_PATTERNS = [
+    "your name", "who are you", "what are you", "introduce yourself",
+    "hello", "hi ", "hey ", "good morning", "good afternoon", "good evening",
+    "thank you", "thanks", "bye", "goodbye", "see you",
+    "how are you", "what can you do", "help me", "what is panya",
+]
+
+
+# ============================================================
+# LOGGING UTILITIES
+# ============================================================
+
+def log_chat_request(
+    question: str,
+    answer: str,
+    retrieval_time: float,
+    rerank_time: float,
+    llm_time: float,
+    total_time: float,
+    retrieved_docs: List,
+    reranked_docs: List,
+    selected_docs: List,
+    max_score: Optional[float],
+    ragas_scores: Optional[Dict[str, Any]] = None,
+):
+    """
+    Log comprehensive information about a chat request.
+    Includes: question, timing metrics, reranking process, chunk details, and RAGAS scores.
+    """
+    separator = "=" * 70
+    
+    # Build log message
+    log_parts = [
+        "",
+        separator,
+        "📩 CHAT REQUEST RECEIVED",
+        separator,
+        f"❓ Question: {question[:200]}{'...' if len(question) > 200 else ''}",
+        "",
+        "⏱️  TIMING BREAKDOWN:",
+        f"   • Retrieval:   {retrieval_time:.3f}s",
+        f"   • Reranking:   {rerank_time:.3f}s", 
+        f"   • LLM:         {llm_time:.3f}s",
+        f"   • Total:       {total_time:.3f}s",
+        "",
+    ]
+    
+    # Reranking section
+    log_parts.append("🔄 RERANKING PROCESS:")
+    log_parts.append(f"   Retrieved: {len(retrieved_docs)} docs → Reranked: {len(reranked_docs)} docs → Selected: {len(selected_docs)} docs")
+    
+    if reranked_docs:
+        log_parts.append("")
+        log_parts.append("   TOP RERANKED DOCS (before selection):")
+        for i, doc in enumerate(reranked_docs[:5]):
+            score = getattr(doc, 'score', None) or doc.metadata.get('score', 'N/A')
+            if isinstance(score, float):
+                score = f"{score:.4f}"
+            content_preview = doc.page_content[:80].replace('\n', ' ')
+            source = doc.metadata.get('source', 'unknown')[:30]
+            log_parts.append(f"   [{i+1}] Score: {score} | {source}")
+            log_parts.append(f"       Preview: {content_preview}...")
+    
+    log_parts.append("")
+    
+    # Selected chunks section
+    log_parts.append("📄 SELECTED CHUNKS (used for context):")
+    if selected_docs:
+        for i, doc in enumerate(selected_docs):
+            score = getattr(doc, 'score', None) or doc.metadata.get('score', 'N/A')
+            if isinstance(score, float):
+                score = f"{score:.4f}"
+            content_preview = doc.page_content[:120].replace('\n', ' ')
+            source = doc.metadata.get('source', 'unknown')
+            chunk_type = doc.metadata.get('chunk_type', 'standard')
+            log_parts.append(f"   ── Chunk {i+1} ──")
+            log_parts.append(f"   Score: {score} | Type: {chunk_type}")
+            log_parts.append(f"   Source: {source}")
+            log_parts.append(f"   Content: {content_preview}...")
+            log_parts.append("")
+    else:
+        log_parts.append("   (No relevant chunks found)")
+        log_parts.append("")
+    
+    # Max score
+    if max_score is not None:
+        log_parts.append(f"📊 MAX RELEVANCE SCORE: {max_score:.4f}")
+    else:
+        log_parts.append("📊 MAX RELEVANCE SCORE: N/A")
+    
+    log_parts.append("")
+    
+    # RAGAS Scores section
+    log_parts.append("📈 RAGAS METRICS (Quality Scores):")
+    if ragas_scores and ragas_scores.get("scores"):
+        scores = ragas_scores["scores"]
+        
+        # Answer Relevancy
+        ar = scores.get("answer_relevancy")
+        ar_str = f"{ar * 100:.1f}%" if ar is not None else "N/A"
+        
+        # Faithfulness
+        faith = scores.get("faithfulness")
+        faith_str = f"{faith * 100:.1f}%" if faith is not None else "N/A"
+        
+        # Context Precision
+        cp = scores.get("context_precision")
+        cp_str = f"{cp * 100:.1f}%" if cp is not None else "N/A"
+        
+        # Context Recall
+        cr = scores.get("context_recall")
+        cr_str = f"{cr * 100:.1f}%" if cr is not None else "N/A"
+        
+        log_parts.append(f"   • Answer Relevancy:    {ar_str}")
+        log_parts.append(f"   • Faithfulness:        {faith_str}")
+        log_parts.append(f"   • Context Precision:   {cp_str}")
+        log_parts.append(f"   • Context Recall:      {cr_str}")
+    else:
+        log_parts.append("   (RAGAS evaluation not available)")
+    
+    log_parts.append(separator)
+    log_parts.append("")
+    
+    # Print the log
+    logger.info("\n".join(log_parts))
 
 
 # ============================================================
@@ -78,6 +212,52 @@ def select_context_docs(retrieved_docs: List, max_candidates: int = MAX_CANDIDAT
 # QUERY PREPROCESSING
 # ============================================================
 
+def fix_markdown_tables(text: str) -> str:
+    """
+    Fix malformed markdown tables that are on a single line.
+    Converts: | A | B | | --- | --- | | 1 | 2 |
+    To proper multi-line format.
+    """
+    if not text or '|' not in text:
+        return text
+    
+    lines = text.split('\n')
+    fixed_lines = []
+    
+    for line in lines:
+        # Check if this line looks like an inline table (has separator pattern inline)
+        # Pattern: | text | text | | --- | --- | | text | text |
+        if re.search(r'\|\s*-{2,}\s*\|.*\|', line) and line.count('|') > 8:
+            # This looks like an inline table, try to fix it
+            # Split by | and filter empty parts
+            parts = [p.strip() for p in line.split('|')]
+            parts = [p for p in parts if p]  # Remove empty strings
+            
+            if len(parts) >= 4:
+                # Find separator indices (cells that are just dashes)
+                sep_indices = [i for i, p in enumerate(parts) if re.match(r'^-+$', p)]
+                
+                if sep_indices and len(sep_indices) >= 1:
+                    # Number of columns = position of first separator
+                    num_cols = sep_indices[0]
+                    
+                    if num_cols > 0 and num_cols == len(sep_indices):
+                        # Build proper table rows
+                        result_rows = []
+                        for i in range(0, len(parts), num_cols):
+                            row_parts = parts[i:i+num_cols]
+                            if len(row_parts) == num_cols:
+                                result_rows.append('| ' + ' | '.join(row_parts) + ' |')
+                        
+                        if result_rows:
+                            fixed_lines.append('\n'.join(result_rows))
+                            continue
+        
+        fixed_lines.append(line)
+    
+    return '\n'.join(fixed_lines)
+
+
 def preprocess_query(query: str) -> str:
     if not query:
         return query
@@ -105,32 +285,98 @@ def preprocess_query(query: str) -> str:
 def build_enhanced_prompt() -> PromptTemplate:
     template = """You are Panya, an Industrial Automation and PLC expert assistant.
 
-REFERENCE DOCUMENTS:
+{history_section}REFERENCE INFORMATION:
 {context}
 
-RULES:
-- Answer strictly based on the documents above
-- Be concise and technical
-- If information is missing, say so clearly
+CRITICAL RULES:
+- Answer using information from the REFERENCE INFORMATION above
+- If the answer is NOT found, say: "I couldn't find specific information about this."
+- DO NOT make up facts or specifications
+- DO NOT mention "Document", "Source", or reference numbers in your answer - just provide the information naturally
+- Answer ONLY the CURRENT QUESTION below
 
-QUESTION:
+FORMATTING:
+- Use bullet points (•) for lists, NOT markdown tables
+- Use **bold** for important terms and specifications
+- Structure your response with clear sections if the answer is complex
+- Keep responses clear, concise and scannable
+
+CURRENT QUESTION:
 {question}
 
 ANSWER:"""
-    return PromptTemplate(input_variables=["context", "question"], template=template)
+    return PromptTemplate(input_variables=["history_section", "context", "question"], template=template)
 
 
 def build_no_context_prompt() -> PromptTemplate:
     template = """You are Panya, an Industrial Automation assistant.
 
-No relevant documents were found.
-Answer using general automation knowledge only.
+{history_section}IMPORTANT: No relevant documents were found in my knowledge base for this question.
 
-QUESTION:
+GUIDELINES:
+- Clearly state that you don't have specific documentation for this topic
+- You may provide general automation/PLC knowledge if applicable
+- Be honest about limitations - don't guess at specific values or specifications
+- Answer ONLY the CURRENT QUESTION below
+
+FORMATTING:
+- Use bullet points (•) for lists
+- Use **bold** for important terms
+- Keep responses clear and concise
+
+CURRENT QUESTION (answer this):
 {question}
 
 ANSWER:"""
-    return PromptTemplate(input_variables=["question"], template=template)
+    return PromptTemplate(input_variables=["history_section", "question"], template=template)
+
+
+def format_chat_history(chat_history: List[dict], max_messages: int = 6) -> str:
+    """
+    Format chat history for inclusion in the prompt.
+    
+    Args:
+        chat_history: List of {"role": "user"|"assistant", "content": "..."}
+        max_messages: Maximum number of recent messages to include
+    
+    Returns:
+        Formatted string for the prompt, or empty string if no history
+    """
+    if not chat_history:
+        return ""
+    
+    # Take only the last N messages
+    recent = chat_history[-max_messages:]
+    
+    if not recent:
+        return ""
+    
+    # Format as numbered exchanges with clear structure
+    formatted_lines = []
+    exchange_num = 1
+    i = 0
+    
+    while i < len(recent):
+        msg = recent[i]
+        if msg.get("role") == "user":
+            user_content = msg.get("content", "")[:200]
+            # Check if there's a following assistant message
+            assistant_content = ""
+            if i + 1 < len(recent) and recent[i + 1].get("role") == "assistant":
+                assistant_content = recent[i + 1].get("content", "")[:200]
+                i += 1
+            
+            formatted_lines.append(f"[Exchange {exchange_num}]")
+            formatted_lines.append(f"  Q: {user_content}")
+            if assistant_content:
+                formatted_lines.append(f"  A: {assistant_content}")
+            exchange_num += 1
+        i += 1
+    
+    if not formatted_lines:
+        return ""
+    
+    return "=== PREVIOUS CONVERSATION ===\n" + "\n".join(formatted_lines) + "\n=== END PREVIOUS CONVERSATION ===\n\n"
 
 
 # ============================================================
@@ -139,13 +385,13 @@ ANSWER:"""
 
 def answer_question(
     question: str,
-    session_id: int,
     db_pool,
     llm,
     embedder,
     collection: str,
     retriever_class,
     reranker_class,
+    chat_history: List[dict] = None,
 ) -> dict:
 
     processed_msg = preprocess_query((question or "").strip())
@@ -154,42 +400,146 @@ def answer_question(
 
     t0 = time.perf_counter()
 
+    # Format chat history for prompt (last 5 messages)
+    history_section = format_chat_history(chat_history or [], max_messages=5)
+
+    # ============ RETRIEVAL PHASE ============
+    t_retrieval_start = time.perf_counter()
+    
     base_retriever = retriever_class(
         connection_pool=db_pool,
         embedder=embedder,
         collection=collection,
     )
-    reranker = reranker_class(base_retriever=base_retriever)
+    
+    # Get raw retrieved docs from base retriever
+    raw_retrieved_docs = base_retriever.invoke(processed_msg) or []
+    t_retrieval_end = time.perf_counter()
+    retrieval_time = t_retrieval_end - t_retrieval_start
 
+    # ============ RERANKING PHASE ============
+    t_rerank_start = time.perf_counter()
+    
+    reranker = reranker_class(base_retriever=base_retriever)
     retrieved_docs = reranker.invoke(processed_msg) or []
     selected_docs = select_context_docs(retrieved_docs)
+    
+    t_rerank_end = time.perf_counter()
+    rerank_time = t_rerank_end - t_rerank_start
 
     context_texts = [d.page_content for d in selected_docs]
+    # Get source names for proper citation
+    context_sources = [d.metadata.get('source', f'Document {i+1}') for i, d in enumerate(selected_docs)]
     max_score = get_doc_score(retrieved_docs[0]) if retrieved_docs else None
 
+    # ============ LLM PHASE ============
+    t_llm_start = time.perf_counter()
+    
     if context_texts:
+        # Format context with actual source names for proper citation
         context_str = "\n\n---\n\n".join(
-            f"[Document {i+1}]\n{c}" for i, c in enumerate(context_texts)
+            f"[Source: {src}]\n{c}" for src, c in zip(context_sources, context_texts)
         )
         chain = (
-            {"context": (lambda _: context_str), "question": RunnablePassthrough()}
+            {
+                "history_section": (lambda _: history_section),
+                "context": (lambda _: context_str),
+                "question": RunnablePassthrough()
+            }
             | build_enhanced_prompt()
             | llm
             | StrOutputParser()
         )
     else:
         chain = (
-            {"question": RunnablePassthrough()}
+            {
+                "history_section": (lambda _: history_section),
+                "question": RunnablePassthrough()
+            }
             | build_no_context_prompt()
             | llm
             | StrOutputParser()
         )
 
     reply = chain.invoke(processed_msg)
+    reply = fix_markdown_tables(reply)  # Fix malformed markdown tables
+    
+    t_llm_end = time.perf_counter()
+    llm_time = t_llm_end - t_llm_start
+
+    # ============ RAGAS EVALUATION ============
+    ragas_scores = None
+    low_quality_response = False
+    
+    # Check if this is an identity/greeting question that should skip RAGAS check
+    question_lower = question.lower()
+    skip_ragas_check = any(pattern in question_lower for pattern in SKIP_RAGAS_PATTERNS)
+    
+    try:
+        from app.ragas_eval import simple_ragas_eval
+        ragas_scores = simple_ragas_eval(
+            question=question,
+            answer=reply,
+            contexts=context_texts
+        )
+        
+        # Check if quality is too low (but skip for identity/greeting questions)
+        if not skip_ragas_check and ragas_scores and ragas_scores.get("scores"):
+            scores = ragas_scores["scores"]
+            # Get scores that are not None
+            quality_scores = []
+            for key in ["faithfulness", "context_precision", "context_recall"]:
+                val = scores.get(key)
+                if val is not None:
+                    quality_scores.append(val)
+            
+            # Calculate average quality
+            if quality_scores:
+                avg_quality = sum(quality_scores) / len(quality_scores)
+                if avg_quality < RAGAS_MIN_THRESHOLD:
+                    low_quality_response = True
+                    original_reply = reply
+                    reply = (
+                        "I'm sorry, but I don't have enough reliable information in my documents "
+                        "to answer this question accurately. The context I found may not be "
+                        "relevant or sufficient.\n\n"
+                        "**Please try:**\n"
+                        "• Rephrasing your question\n"
+                        "• Asking about a more specific topic\n"
+                        "• Checking if the topic is covered in the documentation"
+                    )
+                    logger.warning(
+                        f"⚠️ Low quality response detected (avg={avg_quality:.2f} < {RAGAS_MIN_THRESHOLD}). "
+                        f"Replacing with 'I don't know' message."
+                    )
+    except Exception as e:
+        logger.warning(f"RAGAS evaluation failed: {e}")
+        ragas_scores = None
+
+    total_time = time.perf_counter() - t0
+
+    # ============ LOG THE REQUEST ============
+    log_chat_request(
+        question=question,
+        answer=reply,
+        retrieval_time=retrieval_time,
+        rerank_time=rerank_time,
+        llm_time=llm_time,
+        total_time=total_time,
+        retrieved_docs=raw_retrieved_docs,
+        reranked_docs=retrieved_docs,
+        selected_docs=selected_docs,
+        max_score=max_score,
+        ragas_scores=ragas_scores,
+    )
 
     return {
         "reply": reply,
-        "processing_time": round(time.perf_counter() - t0, 2),
+        "processing_time": round(total_time, 2),
+        "retrieval_time": round(retrieval_time, 2),
+        "rerank_time": round(rerank_time, 2),
+        "llm_time": round(llm_time, 2),
         "context_count": len(context_texts),
         "max_score": max_score,
+        "ragas": ragas_scores,
     }

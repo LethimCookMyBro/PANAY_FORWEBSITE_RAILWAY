@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import Chat from "./pages/Chat";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
+import { LoaderCircle, Bot } from "lucide-react";
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -29,8 +30,14 @@ function App() {
 
   if (loading) {
     return (
-      <div className="h-screen flex items-center justify-center">
-        Loading...
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100 gap-4">
+        <div className="bg-gradient-to-br from-blue-600 to-blue-700 p-3 rounded-2xl shadow-lg shadow-blue-200">
+          <Bot className="w-8 h-8 text-white" />
+        </div>
+        <div className="flex items-center gap-2 text-gray-600">
+          <LoaderCircle size={20} className="animate-spin text-blue-500" />
+          <span className="font-medium">Loading...</span>
+        </div>
       </div>
     );
   }

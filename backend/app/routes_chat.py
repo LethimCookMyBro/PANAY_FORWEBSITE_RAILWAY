@@ -31,7 +31,7 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 class ChatRequest(BaseModel):
     message: str
     session_id: Optional[int] = None
-    collection: str = "default"
+    collection: str = "plc_docs"
 
 
 class CreateSessionRequest(BaseModel):
@@ -61,8 +61,12 @@ def chat(
             user_id=current_user["id"],
             title=payload.message[:50],
         )
+        chat_history = []  # New session, no history
     else:
         session_id = payload.session_id
+        # Fetch recent messages for context (last 10 messages = 5 exchanges)
+        messages = get_chat_messages(db_pool, session_id, current_user["id"]) or []
+        chat_history = [{"role": m["role"], "content": m["content"]} for m in messages[-10:]]
 
     # 2) Save USER message
     insert_chat_message(
@@ -72,16 +76,16 @@ def chat(
         content=payload.message,
     )
 
-    # 3) Ask LLM
+    # 3) Ask LLM with chat history for context
     result = answer_question(
         question=payload.message,
-        session_id=session_id,
         db_pool=db_pool,
         llm=llm,
         embedder=embedder,
         collection=payload.collection,
         retriever_class=PostgresVectorRetriever,
         reranker_class=EnhancedFlashrankRerankRetriever,
+        chat_history=chat_history,  # Pass conversation history
     )
 
     if "reply" not in result:

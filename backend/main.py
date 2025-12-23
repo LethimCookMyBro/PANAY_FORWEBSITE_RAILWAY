@@ -37,6 +37,7 @@ import math
 import re
 import json
 import io
+from uuid import uuid4
 import mimetypes
 import warnings
 
@@ -60,17 +61,18 @@ from app.db import init_db_pool
 from app.routes_auth import router as auth_router
 from app.routes_chat import router as chat_router
 from app.routes_auth import get_current_user
-from app.chat_db import insert_chat_message
-
 
 # Local imports
-from app.eval_logging import ollama_generate_with_stats, append_eval_run
 from app.retriever import (
     PostgresVectorRetriever, 
     EnhancedFlashrankRerankRetriever, 
     NoRerankRetriever
 )
 from app.chatbot import answer_question
+from app.errors import (
+    ErrorResponse, ErrorCode, AppException,
+    create_error_response
+)
 
 # Suppress warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -85,11 +87,11 @@ class Config:
     # Database
     DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql://user:password@postgres:5432/plcdb")
     
-    # Ollama LLM
     OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama3.2")
     OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
     LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.7"))
     LLM_TIMEOUT: int = int(os.getenv("LLM_TIMEOUT", "180"))
+    LLM_NUM_PREDICT: int = int(os.getenv("LLM_NUM_PREDICT", "1024"))  # Max output tokens
     
     # Embeddings
     EMBED_MODEL_NAME: str = os.getenv("EMBED_MODEL", "BAAI/bge-m3")
@@ -561,9 +563,10 @@ async def lifespan(app: FastAPI):
                 model=config.OLLAMA_MODEL,
                 base_url=config.OLLAMA_BASE_URL,
                 temperature=config.LLM_TEMPERATURE,
-                timeout=config.LLM_TIMEOUT
+                timeout=config.LLM_TIMEOUT,
+                num_predict=config.LLM_NUM_PREDICT,  # Limit output tokens
             )
-            logger.info(f"✅ LLM loaded: {config.OLLAMA_MODEL}")
+            logger.info(f"✅ LLM loaded: {config.OLLAMA_MODEL} (max {config.LLM_NUM_PREDICT} tokens)")
         except Exception as e:
             logger.error(f"🔥 Failed to load LLM: {e}")
     
@@ -612,14 +615,76 @@ app = FastAPI(
 app.include_router(auth_router)
 app.include_router(chat_router)
 
-# CORS middleware
+# CORS middleware - tightened for security
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=["*"]
 )
+
+
+# ============================================================================
+# REQUEST TRACING MIDDLEWARE
+# ============================================================================
+
+@app.middleware("http")
+async def add_request_id(request: Request, call_next):
+    """Add request ID to all requests for tracing/debugging"""
+    request_id = str(uuid4())
+    request.state.request_id = request_id
+    
+    # Log request start
+    logger.info(f"[{request_id[:8]}] {request.method} {request.url.path}")
+    
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
+# ============================================================================
+# EXCEPTION HANDLERS
+# ============================================================================
+
+@app.exception_handler(AppException)
+async def app_exception_handler(request: Request, exc: AppException):
+    """Handle custom application exceptions"""
+    request_id = getattr(request.state, 'request_id', None)
+    logger.warning(f"[{request_id}] AppException: {exc.code} - {exc.message}")
+    return create_error_response(
+        code=exc.code,
+        message=exc.message,
+        status_code=exc.status_code,
+        request_id=request_id,
+        details=exc.details
+    )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Convert HTTPException to unified error format"""
+    request_id = getattr(request.state, 'request_id', None)
+    return create_error_response(
+        code=f"HTTP_{exc.status_code}",
+        message=str(exc.detail),
+        status_code=exc.status_code,
+        request_id=request_id
+    )
+
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    """Catch-all for unhandled exceptions"""
+    request_id = getattr(request.state, 'request_id', None)
+    logger.error(f"[{request_id}] Unhandled exception: {exc}", exc_info=True)
+    return create_error_response(
+        code=ErrorCode.INTERNAL_ERROR,
+        message="An unexpected error occurred. Please try again.",
+        status_code=500,
+        request_id=request_id
+    )
 
 
 # ============================================================================
@@ -743,12 +808,8 @@ def chat(
         reranker_class=EnhancedFlashrankRerankRetriever,
     )
 
-    # ✅ บันทึก chat history ผูกกับ user
-    insert_chat_message(
-        user_id=current_user["id"],
-        question=chat_request.message,
-        answer=result.get("reply") or result.get("llm_answer", ""),
-    )
+    # NOTE: Chat history is handled by routes_chat.py when using /api/chat/sessions
+    # This endpoint is for stateless chat - no history saving needed here
 
     return ChatResponse(**sanitize_json(result))
 

@@ -46,6 +46,7 @@ scikit-learn>=1.4
 
 # ---- PDF
 PyMuPDF
+cryptography>=3.1
 
 # ---- Word
 python-docx

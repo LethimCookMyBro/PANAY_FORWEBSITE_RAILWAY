@@ -1,43 +1,354 @@
 import os
 import re
 import json
-import hashlib
 import logging
 from typing import List
-from sentence_transformers import SentenceTransformer
-from langchain_docling import DoclingLoader
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-import psycopg2
+from sentence_transformers import SentenceTransformer
 
+# Singleton embedder instance
 _embedder = None
 
+def get_embedder():
+    """
+    Returns a singleton SentenceTransformer embedder.
+    Uses BAAI/bge-m3 model (matching embed.py and .env configuration).
+    """
+    global _embedder
+    if _embedder is None:
+        model_name = os.getenv("EMBED_MODEL", "BAAI/bge-m3")
+        cache_folder = os.getenv("MODEL_CACHE", "/app/models")
+        logging.info(f"[get_embedder] Loading embedder: {model_name}")
+        _embedder = SentenceTransformer(model_name, cache_folder=cache_folder)
+        logging.info("[get_embedder] Embedder loaded successfully")
+    return _embedder
+
+
 def clean_text(text: str) -> str:
+    """
+    Clean extracted PDF text before chunking.
+    """
+    # Remove excessive whitespace (multiple spaces/tabs/newlines -> single space)
+    text = re.sub(r'\s+', ' ', text)
+    
+    # Remove page headers/footers (common patterns)
+    text = re.sub(r'(Page\s*\d+|\d+\s*of\s*\d+)', '', text, flags=re.IGNORECASE)
+    
+    # Remove Docling/Phoenix-specific patterns
     text = re.sub(r'--- PAGE \d+ ---', '', text)
     text = re.sub(r'\d{6}_en_\d{2,}', '', text)
     text = re.sub(r'PHOENIX CONTACT \d+/\d+', '', text)
-    text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
+    
+    # Remove garbage characters (keep ASCII printable + Thai)
+    text = re.sub(r'[^\x20-\x7E\n\u0E00-\u0E7F]', '', text)
+    
+    # Remove TOC fillers (5+ consecutive dots/dashes/underscores)
+    text = re.sub(r'[.\-_]{5,}', ' ', text)
+    
+    # Clean up any resulting multiple spaces
+    text = re.sub(r'\s+', ' ', text)
+    
     return text.strip()
 
+
+# Keywords that indicate boilerplate/legal content (lowercase)
+BOILERPLATE_KEYWORDS = [
+    'warranty', 'warranties', 'gratis warranty',
+    'trademark', 'trademarks', 'registered trademark',
+    'disclaimer', 'disclaimers',
+    'all rights reserved', 'rights reserved',
+    'liability', 'liable', 'not be liable',
+    'proprietary', 'confidential',
+    'terms and conditions', 'terms of use',
+    'force majeure',
+]
+
+
+def is_boilerplate_chunk(text: str) -> bool:
+    """
+    Detect if chunk is mostly boilerplate/legal content.
+    Uses keyword density to avoid false positives.
+    """
+    if not text:
+        return False
+    
+    text_lower = text.lower()
+    
+    # Count how many boilerplate keywords appear
+    keyword_count = sum(1 for kw in BOILERPLATE_KEYWORDS if kw in text_lower)
+    
+    # If 3+ boilerplate keywords in one chunk, likely boilerplate
+    if keyword_count >= 3:
+        return True
+    
+    # Check for very strong indicators (2 is enough)
+    strong_indicators = ['gratis warranty', 'all rights reserved', 'force majeure', 'terms and conditions']
+    strong_count = sum(1 for kw in strong_indicators if kw in text_lower)
+    if strong_count >= 1 and keyword_count >= 2:
+        return True
+    
+    return False
+
+
+def is_valid_chunk(chunk: Document) -> tuple[bool, str]:
+    """
+    Check if chunk is worth keeping.
+    Returns (is_valid: bool, reason: str)
+    
+    Filters:
+    1. Too short (<50 chars with low alpha)
+    2. Table of Contents entries (page references)
+    3. Low alphabetic ratio (<15% after removing fillers)
+    4. Excessive whitespace (>50%)
+    5. Repetitive characters (10+ same char)
+    6. High special characters (>40% punctuation)
+    7. Header/page number only
+    8. Boilerplate/legal content
+    """
+    content = chunk.page_content.strip()
+    
+    # 1. Too short (<50 chars) - but allow high-alpha short content
+    if len(content) < 50:
+        alpha_ratio = sum(1 for c in content if c.isalpha()) / len(content) if content else 0
+        if alpha_ratio > 0.70:  # Short but meaningful
+            return True, "ok"
+        return False, f"too_short ({len(content)} chars)"
+    
+    # 2. TABLE OF CONTENTS detection - REJECT these!
+    # Pattern: "3.4.1 Something........... 45" or "Chapter 3....... 15"
+    if re.search(r'\d+\.\d+.*\.{3,}\s*\d+', content):
+        return False, "toc_entry"
+    
+    # TOC in markdown table format: "| Something ... | 15 |" or "| 3.1.6 [G] Expansion boards...48 |"
+    if re.search(r'\|.*\.{3,}.*\d+\s*\|', content):
+        return False, "toc_table_entry"
+    
+    # Simple page reference patterns in tables: "| Standards | 15 |" with mostly numbers + short text
+    if '|' in content:
+        # Extract cell contents
+        cells = [c.strip() for c in content.split('|') if c.strip()]
+        # If most cells are just numbers or very short text, it's likely TOC
+        page_number_cells = sum(1 for c in cells if re.match(r'^\d{1,4}$', c))
+        if len(cells) > 0 and page_number_cells >= len(cells) // 2:
+            # Check if content is suspiciously short on actual text
+            total_text = ' '.join(cells)
+            if len(total_text) < 100:
+                return False, "toc_page_reference"
+    
+    # 3. Low alphabetic ratio (<15% letters, excluding fillers)
+    content_no_fillers = re.sub(r'[.\-_=]{2,}', '', content)
+    if len(content_no_fillers) > 10:
+        alpha_count = sum(1 for c in content_no_fillers if c.isalpha())
+        alpha_ratio = alpha_count / len(content_no_fillers)
+        if alpha_ratio < 0.15:
+            return False, f"low_alpha ({alpha_ratio:.1%})"
+    
+    # 4. Excessive whitespace (>50%)
+    whitespace_ratio = sum(1 for c in content if c.isspace()) / len(content) if content else 0
+    if whitespace_ratio > 0.50:
+        return False, f"excessive_whitespace ({whitespace_ratio:.1%})"
+    
+    # 5. Repetitive garbage chars (exclude dots/dashes/underscores/spaces)
+    if re.search(r'([^.\-_\s])\1{9,}', content):
+        return False, "repetitive_chars"
+    
+    # 6. High special characters (>40%) - excluding common formatting
+    non_formatting_special = sum(1 for c in content if not c.isalnum() and not c.isspace() and c not in '.-_=|')
+    special_ratio = non_formatting_special / len(content) if content else 0
+    if special_ratio > 0.40:
+        return False, f"high_special ({special_ratio:.1%})"
+    
+    # 7. Page headers only
+    if re.match(r'^(page\s*\d+|\d+\s*of\s*\d+|chapter\s*\d+)$', content.lower()):
+        return False, "header_only"
+    
+    # 8. Boilerplate/legal content - DISABLED to preserve safety content
+    # if is_boilerplate_chunk(content):
+    #     return False, "boilerplate"
+
+    return True, "ok"
+
+
 def enhance_metadata(metadata: dict, chunk_content: str) -> dict:
-    """เพิ่ม Metadata ที่มีประโยชน์เข้าไปใน Chunk"""
+    """Add useful metadata to chunk"""
     enhanced_meta = metadata.copy()
     enhanced_meta.update({
         "char_count": len(chunk_content),
         "word_count": len(chunk_content.split()),
-        "language": "en", # สมมติว่าเป็นภาษาอังกฤษ
-        "domain": "plcnext_automation"
     })
     return enhanced_meta
 
-def create_pdf_chunks(docs: List[Document]) -> List[Document]:
+
+def get_file_label(source: str) -> str:
+    """
+    Extract clean filename label from source path.
+    Examples:
+        'MELSEC-F_manual.pdf' -> 'MELSEC-F_manual'
+        '/path/to/PLC_guide.pdf' -> 'PLC_guide'
+    """
+    filename = os.path.basename(source)
+    label = os.path.splitext(filename)[0]
+    return label
+
+
+def extract_document_title(docs: List[Document], fallback_source: str) -> str:
+    """
+    Try to extract a meaningful document title from the first page content.
+    Looks for:
+    1. First heading (## or #)
+    2. First line that looks like a title
+    3. Falls back to filename
+    
+    Returns:
+        Clean document title string
+    """
+    if not docs:
+        return get_file_label(fallback_source)
+    
+    # Get first page content
+    first_page = docs[0].page_content if docs else ""
+    
+    # Try to find markdown headings
+    heading_patterns = [
+        r'^#\s+(.+?)$',           # # Title
+        r'^##\s+(.+?)$',          # ## Title
+        r'^###\s+(.+?)$',         # ### Title
+    ]
+    
+    for pattern in heading_patterns:
+        match = re.search(pattern, first_page, re.MULTILINE)
+        if match:
+            title = match.group(1).strip()
+            # Clean up title (remove special chars, limit length)
+            title = re.sub(r'[^\w\s\-]', '', title)
+            title = title[:80]  # Max 80 chars
+            if len(title) > 10:  # Must be substantial
+                return title
+    
+    # Try to find a title-like first line (capitalized, short)
+    lines = first_page.split('\n')
+    for line in lines[:10]:  # Check first 10 lines
+        line = line.strip()
+        if len(line) > 15 and len(line) < 100:
+            # Check if it looks like a title (mostly letters, some caps)
+            alpha_ratio = sum(1 for c in line if c.isalpha()) / len(line) if line else 0
+            if alpha_ratio > 0.6:
+                # Clean and return
+                title = re.sub(r'[^\w\s\-]', '', line)
+                title = title[:80]
+                if len(title) > 10:
+                    return title
+    
+    # Fallback to filename
+    return get_file_label(fallback_source)
+
+
+def split_table_by_rows(table_text: str, max_chars: int = 800) -> List[str]:
+    """
+    Split a markdown table by rows while preserving headers.
+    Each chunk will have the header rows prepended.
+    
+    Args:
+        table_text: Markdown table string
+        max_chars: Maximum characters per chunk
+    
+    Returns:
+        List of table chunks, each with headers preserved
+    """
+    lines = table_text.strip().split('\n')
+    if len(lines) < 2:
+        return [table_text]  # Not a valid table
+    
+    # Find header and separator (first 2 lines typically)
+    # Header: | Col1 | Col2 |
+    # Separator: |------|------|
+    header_lines = []
+    data_lines = []
+    
+    for i, line in enumerate(lines):
+        if i < 2 and ('|' in line):
+            header_lines.append(line)
+        elif '|' in line:
+            data_lines.append(line)
+    
+    if not header_lines:
+        return [table_text]  # No headers found, return as-is
+    
+    header_text = '\n'.join(header_lines)
+    header_len = len(header_text) + 1  # +1 for newline
+    
+    # Split data rows into chunks
+    chunks = []
+    current_chunk_lines = []
+    current_len = header_len
+    
+    for row in data_lines:
+        row_len = len(row) + 1  # +1 for newline
+        
+        # If adding this row exceeds limit, flush current chunk
+        if current_len + row_len > max_chars and current_chunk_lines:
+            chunk_text = header_text + '\n' + '\n'.join(current_chunk_lines)
+            chunks.append(chunk_text)
+            current_chunk_lines = []
+            current_len = header_len
+        
+        current_chunk_lines.append(row)
+        current_len += row_len
+    
+    # Flush remaining rows
+    if current_chunk_lines:
+        chunk_text = header_text + '\n' + '\n'.join(current_chunk_lines)
+        chunks.append(chunk_text)
+    
+    return chunks if chunks else [table_text]
+
+
+def extract_tables_and_prose(text: str) -> tuple[List[str], str]:
+    """
+    Separate markdown tables from prose text.
+    
+    Returns:
+        (list of table strings, remaining prose text)
+    """
+    # Pattern to match markdown tables (consecutive lines starting with |)
+    table_pattern = re.compile(r'((?:^\|.*\|$\n?)+)', re.MULTILINE)
+    
+    tables = []
+    prose = text
+    
+    for match in table_pattern.finditer(text):
+        table_text = match.group(1).strip()
+        # Only consider it a table if it has at least 2 rows (header + data)
+        if table_text.count('\n') >= 1 and '|' in table_text:
+            tables.append(table_text)
+            prose = prose.replace(match.group(1), '\n')  # Remove table from prose
+    
+    return tables, prose
+
+
+def create_pdf_chunks(
+    docs: List[Document],
+    chunk_size: int = 800,
+    chunk_overlap: int = 150
+) -> List[Document]:
+    """
+    Create chunks from Docling-extracted documents with filtering.
+    Extracts key-value pairs separately and labels chunks with document title.
+    
+    Args:
+        docs: List of Document objects from Docling
+        chunk_size: Maximum characters per chunk (default: 800)
+        chunk_overlap: Overlap between chunks (default: 150)
+    """
     all_chunks = []
+    filtered_count = 0
     kv_pattern = re.compile(r'^(?P<key>[A-Za-z0-9\(\)\/\s\.,-]{5,80}?)\s{2,}(?P<value>.+?)$', re.MULTILINE)
     
-    # ปรับปรุง Chunk Strategy ตามข้อเสนอแนะ
+    # Configurable chunk settings
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=800,
-        chunk_overlap=150,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
         separators=["\n\n", "\n", ". ", ", ", " "]
     )
 
@@ -46,46 +357,106 @@ def create_pdf_chunks(docs: List[Document]) -> List[Document]:
         page_metadata = doc.metadata or {}
         source = page_metadata.get('source', 'unknown')
         page_number = page_metadata.get('page', 0)
+        # Use filename for labeling (reverted from smart title extraction)
+        file_label = get_file_label(source)
         
         # Key-Value Extraction Logic
         kv_matches = kv_pattern.findall(page_content)
         for key, value in kv_matches:
-            if len(key.strip()) > 5 and len(value.strip()) > 3:
-                kv_content = f"{key.strip()}: {value.strip()}"
-                kv_metadata = enhance_metadata(
-                    {"source": source, "page": page_number, "chunk_type": "spec_pair"},
-                    kv_content
+            key_clean = key.strip()
+            value_clean = value.strip()
+            
+            # Stronger validation: require meaningful content
+            # 1. Combined length > 25 chars (filters short garbage)
+            # 2. Value must have real content (not just a label word)
+            # 3. Reject section headers and step instructions
+            combined_len = len(key_clean) + len(value_clean)
+            value_has_content = len(value_clean) > 8 or any(c.isdigit() for c in value_clean)
+            
+            # Filter out garbage patterns
+            is_section_header = value_clean.startswith('##') or value_clean.startswith('#')
+            is_step_instruction = re.match(r'^-\s*\d+\s+', key_clean)  # "- 4 Fit the..."
+            is_garbage = is_section_header or bool(is_step_instruction)
+            
+            if combined_len > 25 and value_has_content and not is_garbage:
+                kv_content = f"{file_label}: {key_clean}: {value_clean}"
+                kv_chunk = Document(
+                    page_content=kv_content,
+                    metadata=enhance_metadata(
+                        {"source": os.path.basename(source), "page": page_number, "chunk_type": "spec_pair"},
+                        kv_content
+                    )
                 )
-                all_chunks.append(Document(page_content=kv_content, metadata=kv_metadata))
+                # Apply filtering
+                is_valid, reason = is_valid_chunk(kv_chunk)
+                if is_valid:
+                    all_chunks.append(kv_chunk)
+                else:
+                    filtered_count += 1
         
-        # Remove extracted key-value pairs from prose content
-        prose_content = page_content
+        # Remove extracted key-value pairs from content
+        remaining_content = page_content
         for key, value in kv_matches:
             original_line = f"{key}{' ' * (len(key) - key.strip().__len__())}{value}"
-            prose_content = prose_content.replace(original_line, "")
+            remaining_content = remaining_content.replace(original_line, "")
         
+        # === TABLE-AWARE SPLITTING ===
+        # Extract tables and process them separately with row-based splitting
+        tables, prose_content = extract_tables_and_prose(remaining_content)
+        
+        # Process tables with header-preserving splits
+        for table in tables:
+            table_chunks = split_table_by_rows(table, max_chars=chunk_size)
+            for table_chunk_text in table_chunks:
+                labeled_content = f"{file_label}: {table_chunk_text}"
+                table_chunk = Document(
+                    page_content=labeled_content,
+                    metadata=enhance_metadata(
+                        {"source": os.path.basename(source), "page": page_number, "chunk_type": "table"},
+                        labeled_content
+                    )
+                )
+                is_valid, reason = is_valid_chunk(table_chunk)
+                if is_valid:
+                    all_chunks.append(table_chunk)
+                else:
+                    filtered_count += 1
+        
+        # Process remaining prose content
         prose_content = clean_text(prose_content)
         
         # Create prose chunks
         if prose_content and len(prose_content.strip()) > 50:
             prose_chunks = text_splitter.create_documents([prose_content])
             for chunk in prose_chunks:
+                # Prepend file label to chunk content
+                labeled_content = f"{file_label}: {chunk.page_content}"
+                chunk.page_content = labeled_content
                 chunk.metadata = enhance_metadata(
-                    {"source": source, "page": page_number, "chunk_type": "prose"},
-                    chunk.page_content
+                    {"source": os.path.basename(source), "page": page_number, "chunk_type": "prose"},
+                    labeled_content
                 )
-                all_chunks.append(chunk)
+                # Apply filtering
+                is_valid, reason = is_valid_chunk(chunk)
+                if is_valid:
+                    all_chunks.append(chunk)
+                else:
+                    filtered_count += 1
 
-    logging.info(f"✅ Created {len(all_chunks)} chunks from PDF with enhanced metadata.")
+    logging.info(f"✅ Created {len(all_chunks)} chunks (filtered out {filtered_count} trash chunks)")
     return all_chunks
 
+
 def create_json_qa_chunks(file_path: str) -> List[Document]:
+    """Create chunks from JSON QA file"""
     chunks = []
+    file_label = get_file_label(file_path)
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             qa_pairs = json.load(f)
         for pair in qa_pairs:
-            content = f"Question: {pair.get('question', '')}\nAnswer: {pair.get('answer', '')}"
+            # Prepend file label for consistency with PDF chunks
+            content = f"{file_label}: Question: {pair.get('question', '')}\nAnswer: {pair.get('answer', '')}"
             metadata = enhance_metadata(
                 {"source": os.path.basename(file_path), "chunk_type": "golden_qa"},
                 content
@@ -96,52 +467,13 @@ def create_json_qa_chunks(file_path: str) -> List[Document]:
         logging.error(f"🔥 Failed to process JSON file {file_path}: {e}")
     return chunks
 
+
 def get_embedding_instruction(chunk_type: str) -> str:
-    """ปรับแต่ง instruction ตามประเภทของ Chunk"""
+    """Customize instruction based on chunk type for better embedding quality"""
     instructions = {
         "golden_qa": "Represent this authoritative question-answer pair for search: ",
         "spec_pair": "Represent this technical specification value for search: ",
+        "table": "Represent this technical data table for search: ",
         "prose": "Represent this technical documentation paragraph for search: "
     }
     return instructions.get(chunk_type, "Represent this sentence for searching relevant passages: ")
-
-def embed_chunks(chunks: List[Document], collection: str, embed_model: str, db_url: str):
-    if not chunks: return
-    try:
-        embedder = SentenceTransformer(embed_model, cache_folder='/app/models')
-        conn = psycopg2.connect(db_url)
-        cur = conn.cursor()
-        
-        successful_inserts = 0
-        for chunk in chunks:
-            try:
-                text = chunk.page_content
-                chunk_type = chunk.metadata.get("chunk_type", "prose")
-                instruction = get_embedding_instruction(chunk_type)
-                text_to_embed = instruction + text
-                
-                vector = embedder.encode(text_to_embed).tolist()
-                hash_ = hashlib.sha256(text.encode()).hexdigest()
-                metadata_json = json.dumps(chunk.metadata)
-                
-                cur.execute(
-                    "INSERT INTO documents (content, embedding, collection, hash, metadata) VALUES (%s, %s, %s, %s, %s) ON CONFLICT (hash) DO NOTHING;", 
-                    (text, vector, collection, hash_, metadata_json)
-                )
-                successful_inserts += 1
-            except Exception as e:
-                logging.error(f"🔥 Error embedding chunk: {e}")
-                continue
-        
-        conn.commit()
-        cur.close()
-        conn.close()
-        logging.info(f"✅ Successfully embedded {successful_inserts}/{len(chunks)} chunks into collection '{collection}'")
-    except Exception as e:
-        logging.error(f"🔥 DB embedding error: {e}", exc_info=True)
-
-def get_embedder(model_name: str = "all-MiniLM-L6-v2"):
-    global _embedder
-    if _embedder is None:
-        _embedder = SentenceTransformer(model_name, cache_folder="/app/models")
-    return _embedder

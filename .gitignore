@@ -11,12 +11,16 @@ venv/
 *.sqlite
 # Downloaded models cache - บรรทัดนี้สำคัญที่สุด
 models/
+# Data files (PDFs, documents for embedding)
+data/
 
 # Docker
 *.log
 *.pid
 *.sock
 *.db
+backup.sql
+*.sql.gz
 docker-volumes/
 ollama/
 
