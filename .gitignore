@@ -24,8 +24,7 @@ backup.sql
 docker-volumes/
 ollama/
 
-# VSCode
-.vscode/
+# VSCode - keep settings.json for consistent linting
 
 # OS
 .DS_Store

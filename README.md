@@ -5,8 +5,7 @@ An AI-powered chatbot for **industrial automation** and **PLCnext** technical su
 ## Key Features
 
 - **RAG-Powered Answers** - Retrieves information from embedded documents for accurate responses
-- **Multi-Input Support** - Text, voice (Whisper), and image (OCR) inputs
-- **File Upload** - PDF, TXT, DOCX, CSV, JSON, images, and audio files
+- **Multi-Input Support** - Text, and voice (Whisper)
 - **Local LLM** - Runs offline with LLaMA 3.2 via Ollama (no API costs)
 - **GPU Accelerated** - NVIDIA GPU support for 5-10x faster responses
 
@@ -73,16 +72,16 @@ services:
 docker compose restart backend
 
 # Embed all PDFs in folder
-docker compose exec backend python embed.py /app/data/custom
+docker compose exec backend python embed.py //app/data/custom
 
 # Embed specific file
-docker compose exec backend python embed.py /app/data/custom/manual.pdf
+docker compose exec backend python embed.py //app/data/custom/manual.pdf
 
 # Dry-run (preview only)
-docker compose exec backend python embed.py /app/data/custom --dry-run
+docker compose exec backend python embed.py //app/data/custom --dry-run
 
 # Custom options
-docker compose exec backend python embed.py /app/data/custom \
+docker compose exec backend python embed.py //app/data/custom \
   --collection plc_docs \
   --chunk-size 1000 \
   --batch-size 500
