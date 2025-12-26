@@ -14,10 +14,12 @@ def init_db_pool():
     global _db_pool
 
     if _db_pool is None:
-        DATABASE_URL = os.getenv(
-            "DATABASE_URL",
-            "postgresql://user:password@postgres:5432/plcnextdb"
-        )
+        DATABASE_URL = os.getenv("DATABASE_URL")
+        if not DATABASE_URL:
+            raise RuntimeError(
+                "DATABASE_URL environment variable is required. "
+                "Please set it in your .env file."
+            )
 
         _db_pool = pool.SimpleConnectionPool(
             minconn=1,

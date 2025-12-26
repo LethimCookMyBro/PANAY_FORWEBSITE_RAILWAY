@@ -53,7 +53,7 @@ export const authAPI = {
 
 // Chat API
 export const chatAPI = {
-    sendMessage: (message, sessionId = null, collection = 'plc_docs') =>
+    sendMessage: (message, sessionId = null, collection = 'plcnext') =>
         api.post('/api/chat', { message, session_id: sessionId, collection }),
 
     getSessions: () =>

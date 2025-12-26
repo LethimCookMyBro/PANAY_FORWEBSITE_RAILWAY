@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional
 
@@ -31,7 +31,7 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 class ChatRequest(BaseModel):
     message: str
     session_id: Optional[int] = None
-    collection: str = "plc_docs"
+    collection: str = "plcnext"
 
 
 class CreateSessionRequest(BaseModel):
@@ -65,7 +65,8 @@ def chat(
     else:
         session_id = payload.session_id
         # Fetch recent messages for context (last 10 messages = 5 exchanges)
-        messages = get_chat_messages(db_pool, session_id, current_user["id"]) or []
+        result = get_chat_messages(db_pool, session_id, current_user["id"])
+        messages = result.get("items", []) if result else []
         chat_history = [{"role": m["role"], "content": m["content"]} for m in messages[-10:]]
 
     # 2) Save USER message
@@ -91,19 +92,24 @@ def chat(
     if "reply" not in result:
         raise HTTPException(status_code=500, detail="LLM did not return a reply")
 
-    # 4) Save ASSISTANT message
+    # 4) Save ASSISTANT message with metrics
     insert_chat_message(
         db_pool=db_pool,
         session_id=session_id,
         role="assistant",
         content=result["reply"],
+        metadata={
+            "processing_time": result.get("processing_time", 0.0),
+            "ragas": result.get("ragas"),
+        },
     )
 
     return {
         "session_id": session_id,
         "reply": result["reply"],
+        "processing_time": result.get("processing_time", 0.0),
+        "ragas": result.get("ragas"),
         "metadata": {
-            "processing_time": result.get("processing_time", 0.0),
             "retrieval_time": result.get("retrieval_time", 0.0),
             "context_count": result.get("context_count", 0),
             "max_score": result.get("max_score"),
@@ -198,20 +204,26 @@ def delete_chat_session_route(
 @router.get("/sessions/{session_id}")
 def get_messages(
     session_id: int,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     current_user: dict = Depends(get_current_user),
 ):
     db_pool = get_db_pool()
-    messages = get_chat_messages(
+    result = get_chat_messages(
         db_pool,
         session_id,
         current_user["id"],
+        limit=limit,
+        offset=offset,
     )
 
-    if messages is None:
+    if result is None:
         raise HTTPException(status_code=404, detail="Chat session not found")
 
     return {
         "session_id": session_id,
-        "count": len(messages),
-        "items": messages,
+        "count": len(result["items"]),
+        "total": result["total"],
+        "has_more": result["has_more"],
+        "items": result["items"],
     }

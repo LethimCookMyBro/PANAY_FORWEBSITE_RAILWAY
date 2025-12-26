@@ -26,6 +26,13 @@ import hashlib
 import json
 import gc
 from typing import List
+
+# Force Docling to use CPU if EMBED_USE_CPU is set (prevents OOM on 8GB GPUs)
+if os.getenv("EMBED_USE_CPU", "false").lower() in ("true", "1", "yes"):
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""
+    os.environ["DOCLING_DEVICE"] = "cpu"
+    print("🔧 Forcing CPU mode for Docling (EMBED_USE_CPU=true)")
+
 from dotenv import load_dotenv
 from langchain_docling import DoclingLoader
 from langchain_docling.loader import ExportType
@@ -91,6 +98,7 @@ def flush_chunks(chunks_to_embed: List[Document], embedder, conn, collection: st
     
     logging.info(f"   🔄 Embedding {len(chunks_to_embed)} chunks...")
     # Use normalized embeddings for better cosine similarity (BGE-M3 recommendation)
+    # batch_size=32 works well when Docling uses CPU (leaves GPU memory for embedding)
     embeddings = embedder.encode(texts, show_progress_bar=True, batch_size=32, normalize_embeddings=True)
     
     # Prepare batch data
@@ -148,7 +156,7 @@ def get_already_processed(conn, collection: str) -> set:
 def main():
     parser = argparse.ArgumentParser(description="Embed documents into a Postgres vector database (Docling).")
     parser.add_argument("files", nargs="+", help="Path(s) to PDF/JSON file(s) or folder(s) to embed.")
-    parser.add_argument("--collection", default="plc_docs", help="Collection name.")
+    parser.add_argument("--collection", default="plcnext", help="Collection name.")
     parser.add_argument("--batch-size", type=int, default=1000, help="Number of chunks per embedding batch.")
     parser.add_argument("--chunk-size", type=int, default=800, help="Max characters per chunk.")
     parser.add_argument("--chunk-overlap", type=int, default=150, help="Overlap between chunks.")

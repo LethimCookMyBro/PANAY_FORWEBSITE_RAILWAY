@@ -57,7 +57,7 @@ function Login({ onLogin, onGoRegister }) {
               </label>
               <input
                 type="email"
-                placeholder="you@email.com"
+                placeholder="Your Email"
                 className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400 transition-all bg-gray-50 focus:bg-white"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}

@@ -28,9 +28,13 @@ def get_embedder():
 def clean_text(text: str) -> str:
     """
     Clean extracted PDF text before chunking.
+    Preserves paragraph structure (single newlines) for better semantic chunking.
     """
-    # Remove excessive whitespace (multiple spaces/tabs/newlines -> single space)
-    text = re.sub(r'\s+', ' ', text)
+    # Normalize horizontal whitespace (spaces/tabs -> single space)
+    text = re.sub(r'[ \t]+', ' ', text)
+    
+    # Collapse excessive newlines (3+ -> 2)
+    text = re.sub(r'\n{3,}', '\n\n', text)
     
     # Remove page headers/footers (common patterns)
     text = re.sub(r'(Page\s*\d+|\d+\s*of\s*\d+)', '', text, flags=re.IGNORECASE)
@@ -40,55 +44,20 @@ def clean_text(text: str) -> str:
     text = re.sub(r'\d{6}_en_\d{2,}', '', text)
     text = re.sub(r'PHOENIX CONTACT \d+/\d+', '', text)
     
-    # Remove garbage characters (keep ASCII printable + Thai)
+    # Remove garbage characters (keep ASCII printable + Thai + newlines)
     text = re.sub(r'[^\x20-\x7E\n\u0E00-\u0E7F]', '', text)
     
     # Remove TOC fillers (5+ consecutive dots/dashes/underscores)
     text = re.sub(r'[.\-_]{5,}', ' ', text)
     
-    # Clean up any resulting multiple spaces
-    text = re.sub(r'\s+', ' ', text)
+    # Clean up spaces around newlines
+    text = re.sub(r' *\n *', '\n', text)
     
+    # Final horizontal whitespace cleanup
+    text = re.sub(r'[ \t]+', ' ', text)
+    
+
     return text.strip()
-
-
-# Keywords that indicate boilerplate/legal content (lowercase)
-BOILERPLATE_KEYWORDS = [
-    'warranty', 'warranties', 'gratis warranty',
-    'trademark', 'trademarks', 'registered trademark',
-    'disclaimer', 'disclaimers',
-    'all rights reserved', 'rights reserved',
-    'liability', 'liable', 'not be liable',
-    'proprietary', 'confidential',
-    'terms and conditions', 'terms of use',
-    'force majeure',
-]
-
-
-def is_boilerplate_chunk(text: str) -> bool:
-    """
-    Detect if chunk is mostly boilerplate/legal content.
-    Uses keyword density to avoid false positives.
-    """
-    if not text:
-        return False
-    
-    text_lower = text.lower()
-    
-    # Count how many boilerplate keywords appear
-    keyword_count = sum(1 for kw in BOILERPLATE_KEYWORDS if kw in text_lower)
-    
-    # If 3+ boilerplate keywords in one chunk, likely boilerplate
-    if keyword_count >= 3:
-        return True
-    
-    # Check for very strong indicators (2 is enough)
-    strong_indicators = ['gratis warranty', 'all rights reserved', 'force majeure', 'terms and conditions']
-    strong_count = sum(1 for kw in strong_indicators if kw in text_lower)
-    if strong_count >= 1 and keyword_count >= 2:
-        return True
-    
-    return False
 
 
 def is_valid_chunk(chunk: Document) -> tuple[bool, str]:
@@ -104,7 +73,6 @@ def is_valid_chunk(chunk: Document) -> tuple[bool, str]:
     5. Repetitive characters (10+ same char)
     6. High special characters (>40% punctuation)
     7. Header/page number only
-    8. Boilerplate/legal content
     """
     content = chunk.page_content.strip()
     
@@ -162,10 +130,6 @@ def is_valid_chunk(chunk: Document) -> tuple[bool, str]:
     # 7. Page headers only
     if re.match(r'^(page\s*\d+|\d+\s*of\s*\d+|chapter\s*\d+)$', content.lower()):
         return False, "header_only"
-    
-    # 8. Boilerplate/legal content - DISABLED to preserve safety content
-    # if is_boilerplate_chunk(content):
-    #     return False, "boilerplate"
 
     return True, "ok"
 
@@ -190,58 +154,6 @@ def get_file_label(source: str) -> str:
     filename = os.path.basename(source)
     label = os.path.splitext(filename)[0]
     return label
-
-
-def extract_document_title(docs: List[Document], fallback_source: str) -> str:
-    """
-    Try to extract a meaningful document title from the first page content.
-    Looks for:
-    1. First heading (## or #)
-    2. First line that looks like a title
-    3. Falls back to filename
-    
-    Returns:
-        Clean document title string
-    """
-    if not docs:
-        return get_file_label(fallback_source)
-    
-    # Get first page content
-    first_page = docs[0].page_content if docs else ""
-    
-    # Try to find markdown headings
-    heading_patterns = [
-        r'^#\s+(.+?)$',           # # Title
-        r'^##\s+(.+?)$',          # ## Title
-        r'^###\s+(.+?)$',         # ### Title
-    ]
-    
-    for pattern in heading_patterns:
-        match = re.search(pattern, first_page, re.MULTILINE)
-        if match:
-            title = match.group(1).strip()
-            # Clean up title (remove special chars, limit length)
-            title = re.sub(r'[^\w\s\-]', '', title)
-            title = title[:80]  # Max 80 chars
-            if len(title) > 10:  # Must be substantial
-                return title
-    
-    # Try to find a title-like first line (capitalized, short)
-    lines = first_page.split('\n')
-    for line in lines[:10]:  # Check first 10 lines
-        line = line.strip()
-        if len(line) > 15 and len(line) < 100:
-            # Check if it looks like a title (mostly letters, some caps)
-            alpha_ratio = sum(1 for c in line if c.isalpha()) / len(line) if line else 0
-            if alpha_ratio > 0.6:
-                # Clean and return
-                title = re.sub(r'[^\w\s\-]', '', line)
-                title = title[:80]
-                if len(title) > 10:
-                    return title
-    
-    # Fallback to filename
-    return get_file_label(fallback_source)
 
 
 def split_table_by_rows(table_text: str, max_chars: int = 800) -> List[str]:
@@ -356,8 +268,9 @@ def create_pdf_chunks(
         page_content = doc.page_content
         page_metadata = doc.metadata or {}
         source = page_metadata.get('source', 'unknown')
+        # Note: Docling with MARKDOWN export doesn't provide per-page metadata
+        # Page will be 0 for all chunks. Use DOC_CHUNKS export type for page info.
         page_number = page_metadata.get('page', 0)
-        # Use filename for labeling (reverted from smart title extraction)
         file_label = get_file_label(source)
         
         # Key-Value Extraction Logic
@@ -394,11 +307,8 @@ def create_pdf_chunks(
                 else:
                     filtered_count += 1
         
-        # Remove extracted key-value pairs from content
-        remaining_content = page_content
-        for key, value in kv_matches:
-            original_line = f"{key}{' ' * (len(key) - key.strip().__len__())}{value}"
-            remaining_content = remaining_content.replace(original_line, "")
+        # Remove extracted key-value pairs from content using regex
+        remaining_content = kv_pattern.sub('', page_content)
         
         # === TABLE-AWARE SPLITTING ===
         # Extract tables and process them separately with row-based splitting

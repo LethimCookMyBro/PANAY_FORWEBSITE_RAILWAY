@@ -31,7 +31,6 @@ soundfile
 # ---- OCR
 pytesseract
 Pillow
-typhoon-ocr
 
 # ---- RAGAS & friends
 ragas==0.2.10

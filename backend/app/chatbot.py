@@ -12,7 +12,6 @@ import time
 
 # Setup logging
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format='%(message)s')
 
 
 # ============================================================
@@ -285,19 +284,20 @@ def preprocess_query(query: str) -> str:
 def build_enhanced_prompt() -> PromptTemplate:
     template = """You are Panya, an Industrial Automation and PLC expert assistant.
 
-{history_section}REFERENCE INFORMATION:
+{history_section}CONTEXT:
 {context}
 
 CRITICAL RULES:
-- Answer using information from the REFERENCE INFORMATION above
+- Answer using information from the context above
 - If the answer is NOT found, say: "I couldn't find specific information about this."
 - DO NOT make up facts or specifications
-- DO NOT mention "Document", "Source", or reference numbers in your answer - just provide the information naturally
+- DO NOT mention "Document", "Source", "Context", or reference numbers in your answer - just provide the information naturally
 - Answer ONLY the CURRENT QUESTION below
 
 FORMATTING:
-- Use bullet points (•) for lists, NOT markdown tables
-- Use **bold** for important terms and specifications
+- For step-by-step procedures or "how to" questions: Use NUMBERED LISTS (1. 2. 3.)
+- For feature lists, specifications, or options: Use bullet points (•)
+- Use **bold** for important terms, menu items [like this], and specifications
 - Structure your response with clear sections if the answer is complex
 - Keep responses clear, concise and scannable
 
@@ -432,6 +432,8 @@ def answer_question(
     context_sources = [d.metadata.get('source', f'Document {i+1}') for i, d in enumerate(selected_docs)]
     max_score = get_doc_score(retrieved_docs[0]) if retrieved_docs else None
 
+
+
     # ============ LLM PHASE ============
     t_llm_start = time.perf_counter()
     
@@ -461,7 +463,22 @@ def answer_question(
             | StrOutputParser()
         )
 
-    reply = chain.invoke(processed_msg)
+    # LLM call with retry logic (exponential backoff)
+    max_retries = 3
+    reply = None
+    for attempt in range(max_retries):
+        try:
+            reply = chain.invoke(processed_msg)
+            break  # Success, exit retry loop
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt  # 1s, 2s, 4s
+                logger.warning(f"LLM call failed (attempt {attempt + 1}/{max_retries}), retrying in {wait_time}s: {e}")
+                time.sleep(wait_time)
+            else:
+                logger.error(f"LLM call failed after {max_retries} attempts: {e}")
+                raise
+    
     reply = fix_markdown_tables(reply)  # Fix malformed markdown tables
     
     t_llm_end = time.perf_counter()

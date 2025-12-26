@@ -56,6 +56,9 @@ const formatTime = (timestamp) => {
  * Convert markdown tables (including inline/malformed ones) to bullet points.
  * This directly transforms table content to bullet format, bypassing
  * ReactMarkdown table rendering for more reliable output.
+ * 
+ * NOTE: Backend (chatbot.py) also has fix_markdown_tables() that runs first.
+ * This frontend version serves as a fallback for edge cases.
  */
 const fixMarkdownTable = (text) => {
   if (!text || !text.includes('|')) return text;
@@ -140,6 +143,10 @@ function Chat({ onLogout }) {
   // Copy state
   const [copiedMessageId, setCopiedMessageId] = useState(null);
 
+  // Pagination state
+  const [chatPagination, setChatPagination] = useState({}); // { sessionId: { hasMore, total, offset } }
+  const [loadingMore, setLoadingMore] = useState(false);
+
   const chatEndRef = useRef(null);
   const inputRef = useRef(null);
 
@@ -185,7 +192,7 @@ function Chat({ onLogout }) {
   useEffect(() => {
     api.get("/api/auth/me")
       .then(res => setUser(res.data))
-      .catch(() => { });
+      .catch(err => console.error("Failed to load user:", err));
   }, []);
 
   /* ================= LOAD SESSIONS ================= */
@@ -200,7 +207,7 @@ function Chat({ onLogout }) {
           updated_at: s.updated_at || s.created_at,
         }));
         setChatHistory(sessions);
-        // ถ้าไม่มี activeChat และมี session ให้เลือกอันแรก
+        // If no active chat and sessions exist, select the first one
         if (sessions.length > 0 && !activeChatId) {
           setActiveChatId(sessions[0].id);
         }
@@ -220,6 +227,9 @@ function Chat({ onLogout }) {
         const messages = res.data.items.map(m => ({
           text: m.content,
           sender: m.role === "user" ? "user" : "bot",
+          timestamp: m.created_at,
+          processingTime: m.metadata?.processing_time,
+          ragas: m.metadata?.ragas,
         }));
 
         setChatHistory(prev =>
@@ -227,11 +237,63 @@ function Chat({ onLogout }) {
             c.id === activeChatId ? { ...c, messages } : c
           )
         );
+
+        // Track pagination state
+        setChatPagination(prev => ({
+          ...prev,
+          [activeChatId]: {
+            hasMore: res.data.has_more,
+            total: res.data.total,
+            offset: res.data.items.length,
+          }
+        }));
       })
-      .catch(() => {
-        // กรณีหา session ไม่เจอ หรือ error อาจจะ clear activeChatId
+      .catch(err => {
+        // Session not found or error - log for debugging
+        console.error("Failed to load messages:", err);
       });
   }, [activeChatId]);
+
+  /* ================= LOAD MORE MESSAGES ================= */
+  const loadMoreMessages = async () => {
+    if (!activeChatId || loadingMore) return;
+
+    const pagination = chatPagination[activeChatId];
+    if (!pagination?.hasMore) return;
+
+    setLoadingMore(true);
+    try {
+      const res = await api.get(`/api/chat/sessions/${activeChatId}?offset=${pagination.offset}`);
+      const olderMessages = res.data.items.map(m => ({
+        text: m.content,
+        sender: m.role === "user" ? "user" : "bot",
+        timestamp: m.created_at,
+        processingTime: m.metadata?.processing_time,
+        ragas: m.metadata?.ragas,
+      }));
+
+      setChatHistory(prev =>
+        prev.map(c =>
+          c.id === activeChatId
+            ? { ...c, messages: [...olderMessages, ...c.messages] }
+            : c
+        )
+      );
+
+      setChatPagination(prev => ({
+        ...prev,
+        [activeChatId]: {
+          ...prev[activeChatId],
+          hasMore: res.data.has_more,
+          offset: prev[activeChatId].offset + res.data.items.length,
+        }
+      }));
+    } catch (err) {
+      console.error('Failed to load more messages:', err);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   /* ================= HANDLERS ================= */
 
@@ -288,7 +350,13 @@ function Chat({ onLogout }) {
         setPendingMessage(null); // Clear pending since message is now in session
       }
 
-      const botMessage = { text: res.data.reply, sender: "bot", timestamp: new Date().toISOString() };
+      const botMessage = {
+        text: res.data.reply,
+        sender: "bot",
+        timestamp: new Date().toISOString(),
+        processingTime: res.data.processing_time,
+        ragas: res.data.ragas
+      };
 
       setChatHistory(prev =>
         prev.map(c =>
@@ -565,10 +633,83 @@ function Chat({ onLogout }) {
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 scroll-smooth">
           <div className="max-w-3xl mx-auto flex flex-col gap-6 pb-4">
 
-            {activeChat?.messages.length === 0 && !isLoading && (
-              <div className="flex flex-col items-center justify-center h-[50vh] text-gray-300 gap-4">
-                <Bot size={48} className="text-gray-200" />
-                <p>Ask anything about Industrial Automation...</p>
+            {(!activeChat || activeChat.messages.length === 0) && !isLoading && !pendingMessage && (
+              <div className="flex flex-col items-center justify-center py-8 px-4">
+                {/* Avatar */}
+                <div className="bg-gradient-to-br from-blue-500 to-blue-600 p-4 rounded-2xl shadow-lg mb-6">
+                  <Bot size={40} className="text-white" />
+                </div>
+
+                {/* Welcome Text */}
+                <h2 className="text-2xl font-bold text-gray-800 mb-2">Hi, I'm Panya! 👋</h2>
+                <p className="text-gray-500 text-center max-w-md mb-8">
+                  Your Industrial Automation & PLC Expert Assistant. I can help you with troubleshooting, error codes, and technical documentation.
+                </p>
+
+                {/* Tips Card */}
+                <div className="bg-blue-50 border border-blue-100 rounded-xl p-5 max-w-lg w-full">
+                  <h3 className="font-semibold text-blue-800 mb-3 flex items-center gap-2">
+                    <span className="text-lg">💡</span> Tips for Best Results
+                  </h3>
+                  <ul className="space-y-2 text-sm text-blue-700">
+                    <li className="flex items-start gap-2">
+                      <span className="text-blue-400 mt-0.5">•</span>
+                      <span><strong>Be specific</strong> — Include product names, model numbers, or error codes</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-blue-400 mt-0.5">•</span>
+                      <span><strong>Mention the manual</strong> — e.g., "In the FX3 manual..." or "Data Collector..."</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-blue-400 mt-0.5">•</span>
+                      <span><strong>Ask one thing at a time</strong> — Focused questions get better answers</span>
+                    </li>
+                  </ul>
+                </div>
+
+                {/* Example Prompts */}
+                <div className="mt-6 w-full max-w-lg">
+                  <p className="text-xs text-gray-400 uppercase tracking-wider mb-3 text-center">Try asking</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {[
+                      "What does error code F800H mean?",
+                      "How to configure CC-Link IE Field?",
+                      "FX3 timer instructions",
+                      "Data Collector troubleshooting"
+                    ].map((example, idx) => (
+                      <button
+                        key={idx}
+                        onClick={() => {
+                          setInput(example);
+                          inputRef.current?.focus();
+                        }}
+                        className="text-left px-4 py-3 bg-white border border-gray-200 rounded-xl text-sm text-gray-600 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 transition-all"
+                      >
+                        {example}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Load More Button */}
+            {activeChatId && chatPagination[activeChatId]?.hasMore && (
+              <div className="flex justify-center py-3">
+                <button
+                  onClick={loadMoreMessages}
+                  disabled={loadingMore}
+                  className="flex items-center gap-2 px-4 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg transition-all disabled:opacity-50"
+                >
+                  {loadingMore ? (
+                    <>
+                      <LoaderCircle size={14} className="animate-spin" />
+                      Loading...
+                    </>
+                  ) : (
+                    "↑ Load older messages"
+                  )}
+                </button>
               </div>
             )}
 
@@ -667,6 +808,46 @@ function Chat({ onLogout }) {
                     m.text
                   )}
                 </div>
+                {/* Metrics Display for Bot Messages */}
+                {m.sender === "bot" && (m.processingTime || m.ragas) && (
+                  <div className="flex flex-wrap items-center gap-3 mt-2 text-[11px] text-gray-600 bg-gray-50 rounded-lg px-3 py-2">
+                    {m.processingTime && (
+                      <span className="flex items-center gap-1">
+                        <span>⏱️</span>
+                        <span className="font-medium">{m.processingTime.toFixed(2)}s</span>
+                      </span>
+                    )}
+                    {m.ragas?.scores && (
+                      <>
+                        <span className="text-gray-300">|</span>
+                        {m.ragas.scores.context_precision != null && (
+                          <span title="Context Precision">
+                            <span className="text-gray-500">Context Precision:</span>{" "}
+                            <span className="font-medium">{(m.ragas.scores.context_precision * 100).toFixed(1)}%</span>
+                          </span>
+                        )}
+                        {m.ragas.scores.context_recall != null && (
+                          <span title="Context Recall">
+                            <span className="text-gray-500">Context Recall:</span>{" "}
+                            <span className="font-medium">{(m.ragas.scores.context_recall * 100).toFixed(1)}%</span>
+                          </span>
+                        )}
+                        {m.ragas.scores.answer_relevancy != null && (
+                          <span title="Answer Relevancy">
+                            <span className="text-gray-500">Answer Relevancy:</span>{" "}
+                            <span className="font-medium">{(m.ragas.scores.answer_relevancy * 100).toFixed(1)}%</span>
+                          </span>
+                        )}
+                        {m.ragas.scores.faithfulness != null && (
+                          <span title="Faithfulness">
+                            <span className="text-gray-500">Faithfulness:</span>{" "}
+                            <span className="font-medium">{(m.ragas.scores.faithfulness * 100).toFixed(1)}%</span>
+                          </span>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
                 <div className={`flex items-center gap-2 mt-1 ${m.sender === "user" ? "flex-row-reverse" : ""}`}>
                   {m.timestamp && (
                     <span className="text-[10px] text-gray-400 px-1">

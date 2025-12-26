@@ -54,11 +54,11 @@ export default function Register({ onRegisterSuccess, onBackToLogin }) {
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                Full Name
+                Username
               </label>
               <input
                 type="text"
-                placeholder="John Doe"
+                placeholder="Your Username"
                 className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400 transition-all bg-gray-50 focus:bg-white"
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
@@ -72,7 +72,7 @@ export default function Register({ onRegisterSuccess, onBackToLogin }) {
               </label>
               <input
                 type="email"
-                placeholder="you@email.com"
+                placeholder="Your Email"
                 className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400 transition-all bg-gray-50 focus:bg-white"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}

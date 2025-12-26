@@ -69,6 +69,8 @@ from app.retriever import (
     NoRerankRetriever
 )
 from app.chatbot import answer_question
+from app.embed_logic import get_embedder
+from app.utils import set_llm
 from app.errors import (
     ErrorResponse, ErrorCode, AppException,
     create_error_response
@@ -84,8 +86,14 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 class Config:
     """Centralized configuration management"""
     
-    # Database
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql://user:password@postgres:5432/plcdb")
+    # Database - REQUIRED, no fallback to avoid hardcoded credentials
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "")
+    
+    @staticmethod
+    def validate():
+        """Validate required configuration"""
+        if not Config.DATABASE_URL:
+            raise RuntimeError("DATABASE_URL environment variable is required.")
     
     OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama3.2")
     OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
@@ -109,7 +117,7 @@ class Config:
     DB_POOL_MAX: int = int(os.getenv("DB_POOL_MAX", "10"))
     
     # Default collection name for vector store
-    DEFAULT_COLLECTION: str = os.getenv("DEFAULT_COLLECTION", "plc_docs")
+    DEFAULT_COLLECTION: str = os.getenv("DEFAULT_COLLECTION", "plcnext")
 
 
 config = Config()
@@ -128,6 +136,10 @@ logger = logging.getLogger("PLCAssistant")
 logger.info("=" * 60)
 logger.info("🤖 PLC Assistant v3.0 - Starting up")
 logger.info("=" * 60)
+
+# Validate required configuration
+Config.validate()
+
 logger.info(f"  Database URL: {config.DATABASE_URL[:50]}...")
 logger.info(f"  Ollama URL: {config.OLLAMA_BASE_URL}")
 logger.info(f"  Ollama Model: {config.OLLAMA_MODEL}")
@@ -544,7 +556,7 @@ async def lifespan(app: FastAPI):
     # Initialize database pool
     try:
         if test_database_connection():
-            # init_db_pool() จะสร้างและคืน SimpleConnectionPool ตามที่คุณเขียนใน backend/app/db.py
+            # init_db_pool() creates and returns SimpleConnectionPool as defined in backend/app/db.py
             db_pool = init_db_pool()
             app.state.db_pool = db_pool
             logger.info("✅ Database connection pool created via init_db_pool()")
@@ -566,17 +578,15 @@ async def lifespan(app: FastAPI):
                 timeout=config.LLM_TIMEOUT,
                 num_predict=config.LLM_NUM_PREDICT,  # Limit output tokens
             )
+            set_llm(app.state.llm)  # Share LLM with utils module
             logger.info(f"✅ LLM loaded: {config.OLLAMA_MODEL} (max {config.LLM_NUM_PREDICT} tokens)")
         except Exception as e:
             logger.error(f"🔥 Failed to load LLM: {e}")
     
-    # Initialize embedder
+    # Initialize embedder (use singleton from embed_logic)
     app.state.embedder = None
     try:
-        app.state.embedder = SentenceTransformer(
-            config.EMBED_MODEL_NAME,
-            cache_folder='/app/models'
-        )
+        app.state.embedder = get_embedder()
         logger.info(f"✅ Embedder loaded: {config.EMBED_MODEL_NAME}")
     except Exception as e:
         logger.error(f"🔥 Failed to load embedder: {e}")
@@ -693,7 +703,7 @@ async def general_exception_handler(request: Request, exc: Exception):
 
 class ChatRequest(BaseModel):
     message: str
-    collection: str = Field(default="plc_docs")
+    collection: str = Field(default="plcnext")
 
 
 class ChatResponse(BaseModel):
@@ -799,7 +809,7 @@ def chat(
         raise HTTPException(status_code=503, detail="Embedder not available")
 
     result = answer_question(
-        question=chat_request.message,   # ✅ ใช้ message
+        question=chat_request.message,   # Use message from request
         db_pool=db_pool,
         llm=llm,
         embedder=embedder,
@@ -986,6 +996,11 @@ def transcribe(file: UploadFile = File(...)):
             detail="Whisper not available. Install faster-whisper."
         )
     
+    # Use cached model for faster subsequent requests
+    if not hasattr(app.state, 'whisper_model') or app.state.whisper_model is None:
+        logger.info("Loading Whisper model (small.en)...")
+        app.state.whisper_model = WhisperModel("small.en", device="cpu", compute_type="float32")
+    
     # Save to temp file
     suffix = "." + file.filename.split('.')[-1]
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -993,8 +1008,7 @@ def transcribe(file: UploadFile = File(...)):
         tmp_path = tmp.name
     
     try:
-        model = WhisperModel("small.en", device="cpu", compute_type="float32")
-        segments, _ = model.transcribe(tmp_path, language="en", beam_size=1)
+        segments, _ = app.state.whisper_model.transcribe(tmp_path, language="en", beam_size=1)
         transcript = "".join(s.text for s in segments)
         return {"text": transcript.strip()}
     finally:

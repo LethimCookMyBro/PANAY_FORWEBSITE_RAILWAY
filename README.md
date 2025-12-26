@@ -82,7 +82,7 @@ docker compose exec backend python embed.py //app/data/custom --dry-run
 
 # Custom options
 docker compose exec backend python embed.py //app/data/custom \
-  --collection plc_docs \
+  --collection plcnext \
   --chunk-size 1000 \
   --batch-size 500
 ```
@@ -91,7 +91,7 @@ docker compose exec backend python embed.py //app/data/custom \
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--collection` | `plc_docs` | Vector store collection name |
+| `--collection` | `plcnext` | Vector store collection name |
 | `--chunk-size` | `1000` | Characters per chunk |
 | `--chunk-overlap` | `200` | Overlap between chunks |
 | `--batch-size` | `1000` | Embeddings per batch |

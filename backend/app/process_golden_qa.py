@@ -1,6 +1,6 @@
 """
 Process Golden QA data for RAGAS evaluation
-ไฟล์: backend/app/process_golden_qa.py
+File: backend/app/process_golden_qa.py
 """
 
 import json
@@ -30,7 +30,10 @@ def load_golden_qa(filepath: str) -> List[Dict[str, Any]]:
 
 def setup_dependencies():
     """Setup database pool, LLM, and embedder"""
-    DB_URL = os.getenv("DATABASE_URL", "postgresql://user:password@postgres:5432/plcnextdb")
+    DB_URL = os.getenv("DATABASE_URL")
+    if not DB_URL:
+        raise RuntimeError("DATABASE_URL environment variable is required.")
+    
     OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
     OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
     EMBED_MODEL_NAME = os.getenv("EMBED_MODEL", "BAAI/bge-m3")

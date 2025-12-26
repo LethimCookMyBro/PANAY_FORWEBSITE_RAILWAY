@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import re
 from typing import List, Any, Tuple
 
 from pydantic import Field
@@ -8,19 +9,32 @@ from langchain_core.retrievers import BaseRetriever
 from langchain_core.documents import Document
 
 from pgvector.psycopg2 import register_vector
-import psycopg2  # noqa: F401 (ไว้ให้ชัดว่าใช้กับ connection_pool)
-import numpy as np  # noqa: F401 (บางกรณีใช้ตรวจชนิด)
+import psycopg2  # noqa: F401 (used with connection_pool)
+import numpy as np  # noqa: F401 (for type checking in some cases)
 
-# flashrank เป็น optional — ถ้าไม่มีจะ fallback ไปใช้ base score
+# flashrank is optional - falls back to base score if not available
 try:
     from flashrank import Ranker, RerankRequest  # type: ignore
     _FLASHRANK_AVAILABLE = True
 except Exception:
     _FLASHRANK_AVAILABLE = False
 
+# Singleton ranker instance for performance
+_ranker_instance = None
+
+def _get_ranker():
+    """Get or create singleton Ranker instance."""
+    global _ranker_instance
+    if _ranker_instance is None and _FLASHRANK_AVAILABLE:
+        model = os.getenv("RERANK_MODEL", "ms-marco-MiniLM-L-12-v2")
+        cache_dir = os.getenv("MODEL_CACHE", "/app/models")
+        _ranker_instance = Ranker(model_name=model, cache_dir=cache_dir)
+        logging.info(f"[Ranker] Initialized: {model}")
+    return _ranker_instance
+
 
 def _safe_load_json(val):
-    """คืน dict เสมอ แม้ metadata จะเป็นสตริงหรือ None"""
+    """Always returns a dict, even if metadata is a string or None."""
     if not val:
         return {}
     if isinstance(val, dict):
@@ -43,10 +57,10 @@ def _env_int(key: str, default: int) -> int:
 # ===============================
 class PostgresVectorRetriever(BaseRetriever):
     """
-    ดึงเอกสารจากตาราง documents (pgvector)
-    - ใช้ connection_pool (psycopg2.pool) ที่ main.py เตรียมไว้
-    - register_vector(conn) ทุกครั้งก่อน query
-    - คืน list[Document] พร้อม metadata['distance']
+    Retrieve documents from the 'documents' table (pgvector).
+    - Uses connection_pool (psycopg2.pool) prepared by main.py
+    - Calls register_vector(conn) before each query
+    - Returns list[Document] with metadata['distance']
     """
     connection_pool: Any = Field(...)
     embedder: Any = Field(...)
@@ -54,7 +68,7 @@ class PostgresVectorRetriever(BaseRetriever):
     limit: int = Field(default_factory=lambda: _env_int("RETRIEVE_LIMIT", 50))
 
     def _get_relevant_documents(self, query: str) -> List[Document]:
-        # embedder ของคุณ (SentenceTransformer) คืน numpy.ndarray
+        # SentenceTransformer embedder returns numpy.ndarray
         query_vector = self.embedder.encode(query)
 
         conn = self.connection_pool.getconn()
@@ -92,18 +106,23 @@ class PostgresVectorRetriever(BaseRetriever):
 # ===============================
 class EnhancedFlashrankRerankRetriever(BaseRetriever):
     """
-    ขั้น rerank (lexical+semantic) ด้วย Flashrank แล้วบวก domain-boost
-    - base_retriever: เรียกหา candidates ก่อน
-    - top_n: จำนวนผลลัพธ์สุดท้าย (env: RERANK_TOPN)
-    - จำกัดจำนวนแคนดิเดตที่ส่งไป Flashrank ด้วย env: RERANK_CANDIDATES_MAX (ดีต่อความไว)
+    Rerank stage (lexical+semantic) using Flashrank with domain-boost.
+    - base_retriever: first retrieves candidates
+    - top_n: number of final results (env: RERANK_TOPN)
+    - Limits candidates sent to Flashrank via env: RERANK_CANDIDATES_MAX (for speed/stability)
     """
     base_retriever: BaseRetriever = Field(...)
     top_n: int = Field(default_factory=lambda: _env_int("RERANK_TOPN", 8))
 
-    # คำสำคัญเฉพาะโดเมน (boost)
+    # Domain-specific keywords for boosting
     _PLC_TERMS = [
+        # Phoenix Contact
         "plcnext", "phoenix contact", "gds", "esm", "profinet", "axc f",
-        "axc f 2152", "axc f 3152", "axc f 1152", "plcnext engineer"
+        "axc f 2152", "axc f 3152", "axc f 1152", "plcnext engineer",
+        # Mitsubishi
+        "melsec", "fx3", "fx3u", "fx3g", "iq-r", "rcpu", "qcpu", "lcpu",
+        "cc-link", "cc link", "edgecross", "data collector", "gx works",
+        "iq edgecross", "mitsubishi"
     ]
     _PROTO_TERMS = [
         "protocol", "mode", "rs-485", "rs485", "profinet", "ethernet",
@@ -112,14 +131,14 @@ class EnhancedFlashrankRerankRetriever(BaseRetriever):
     ]
 
     def _rank(self, query: str, docs: List[Document]) -> List[Tuple[float, Document]]:
-        # 1) คะแนนจาก Flashrank (ถ้าใช้ได้) ไม่งั้นใช้ 1 - distance เป็น similarity
-        if _FLASHRANK_AVAILABLE:
+        # 1) Get scores from Flashrank (if available), otherwise use 1 - distance as similarity
+        ranker = _get_ranker()
+        if ranker is not None:
             try:
-                ranker = Ranker(model_name="ms-marco-MiniLM-L-12-v2", cache_dir="/app/models")
                 passages = [{"id": i, "text": d.page_content} for i, d in enumerate(docs)]
                 req = RerankRequest(query=query, passages=passages)
                 result = ranker.rerank(req)
-                # ชื่อฟิลด์ของ flashrank บางเวอร์ชันอาจเป็น "id/score" หรือ "index/relevance_score"
+                # Field names may be "id/score" or "index/relevance_score" depending on flashrank version
                 pairs: List[Tuple[float, Document]] = []
                 for it in result:
                     idx = int(it.get("id", it.get("index")))
@@ -131,12 +150,27 @@ class EnhancedFlashrankRerankRetriever(BaseRetriever):
         else:
             pairs = [(1.0 - float(d.metadata.get("distance", 1.0)), d) for d in docs]
 
-        # 2) domain-boost (นุ่มลง + capped)
+        # 2) Apply domain-specific boosts (soft + capped)
         boosted: List[Tuple[float, Document]] = []
         q_tokens = (query or "").lower().split()
+        query_upper = (query or "").upper()
+        
+        # Extract error/event codes from query (pattern: letter + numbers + H, e.g., F800H, 9801H)
+        code_pattern = re.compile(r'\b[A-F0-9]{4,5}H\b', re.IGNORECASE)
+        query_codes = set(code_pattern.findall(query_upper))
+        
         for s, d in pairs:
             text_low = (d.page_content or "").lower()
+            text_upper = (d.page_content or "").upper()
             bonus = 0.0
+            
+            # HIGH PRIORITY: Exact error/event code match (e.g., F800H, F389H)
+            if query_codes:
+                chunk_codes = set(code_pattern.findall(text_upper))
+                matching_codes = query_codes & chunk_codes
+                if matching_codes:
+                    bonus += 2.0  # Strong boost for exact code match
+            
             if any(w in text_low for w in self._PLC_TERMS):
                 bonus += 0.10
             if any(tok in text_low for tok in q_tokens if tok and len(tok) > 2):
@@ -155,11 +189,11 @@ class EnhancedFlashrankRerankRetriever(BaseRetriever):
         return boosted
 
     def _get_relevant_documents(self, query: str) -> List[Document]:
-        # ✅ แก้จาก get_relevant_documents เป็น invoke
+        # Use invoke() instead of deprecated get_relevant_documents()
         cand = self.base_retriever.invoke(query) or []
         if not cand:
             return []
-        # ✅ จำกัดจำนวนที่ส่งเข้า Flashrank เพื่อความไว/เสถียร
+        # Limit candidates sent to Flashrank for speed/stability
         cap = _env_int("RERANK_CANDIDATES_MAX", 32)
         ranked = self._rank(query, cand[:cap])
         
@@ -172,16 +206,16 @@ class EnhancedFlashrankRerankRetriever(BaseRetriever):
 
 
 # ===============================
-# No-op Reranker (สำหรับ A/B test)
+# No-op Reranker (for A/B testing)
 # ===============================
 class NoRerankRetriever(BaseRetriever):
     """
-    ไม่ทำ rerank ใด ๆ — ส่งต่อผลจาก base_retriever แล้วตัด Top-N
+    No reranking - passes through results from base_retriever and truncates to Top-N.
     """
     base_retriever: BaseRetriever = Field(...)
     top_n: int = Field(default=8)
 
     def _get_relevant_documents(self, query: str) -> List[Document]:
-        # ✅ แก้จาก get_relevant_documents เป็น invoke
+        # Use invoke() instead of deprecated get_relevant_documents()
         docs = self.base_retriever.invoke(query) or []
         return docs[: self.top_n]

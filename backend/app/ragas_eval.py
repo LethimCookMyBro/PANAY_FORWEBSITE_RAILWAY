@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 _llm_cache = None
 _embeddings_cache = None
+_fast_embedder_cache = None
 
 # -----------------------------
 # Helpers
@@ -22,7 +23,7 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 def _extract_ground_truth_from_contexts(question: str, contexts: List[str]) -> Optional[str]:
-    """(ออปชัน) พยายามดึง Ground Truth จากบล็อก Q/A ใน contexts ถ้ามีแนบมา"""
+    """(Optional) Try to extract Ground Truth from Q/A blocks in contexts if present."""
     if not contexts:
         return None
     q = (question or "").strip().lower()
@@ -51,8 +52,8 @@ def _extract_ground_truth_from_contexts(question: str, contexts: List[str]) -> O
 
 def _choose_contexts(question: str, contexts: List[str], k: int, max_chars: int) -> List[str]:
     """
-    เลือก K บริบท: ให้คะแนนจาก Jaccard overlap กับคำถาม + โบนัสถ้าเป็นบล็อก Q/A
-    (เขียนแบบตรง ๆ ไม่มี walrus เพื่อเลี่ยง syntax issue)
+    Choose K contexts: Score based on Jaccard overlap with question + bonus if Q/A block.
+    (Written straightforwardly without walrus operator to avoid syntax issues)
     """
     qset = set((question or "").lower().split())
     scored: List[tuple] = []
@@ -70,7 +71,7 @@ def _choose_contexts(question: str, contexts: List[str], k: int, max_chars: int)
 # Models
 # -----------------------------
 def _build_langchain_llm():
-    """สร้าง LLM สำหรับใช้กับ RAGAS (รองรับ ollama/openai) + cache"""
+    """Build LLM for RAGAS (supports ollama/openai) + caching."""
     global _llm_cache
     if _llm_cache is not None:
         return _llm_cache
@@ -91,16 +92,16 @@ def _build_langchain_llm():
         logger.info(f"[RAGAS LLM] OpenAI model={model}")
         return _llm_cache
 
-    # ---- OLLAMA (ค่าเริ่มต้น) ----
+    # ---- OLLAMA (default) ----
     try:
-        from langchain_ollama import ChatOllama  # แพ็กเกจใหม่ แนะนำ
+        from langchain_ollama import ChatOllama  # New package, recommended
         backend = "langchain_ollama"
     except Exception:
-        from langchain_community.chat_models import ChatOllama  # fallback เก่า
+        from langchain_community.chat_models import ChatOllama  # Legacy fallback
         backend = "langchain_community"
 
     base_url = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
-    # ใช้โมเดล judge ถ้ามี ไม่งั้น fallback เป็นโมเดลหลัก
+    # Use judge model if available, otherwise fallback to main model
     model = os.getenv("RAGAS_LLM_MODEL", os.getenv("OLLAMA_MODEL", "llama3.2"))
 
     model_kwargs = {
@@ -119,12 +120,12 @@ def _build_langchain_llm():
 
 
 def _build_embeddings():
-    """Embeddings สำหรับ RAGAS/embedding-only + cache"""
+    """Build Embeddings for RAGAS/embedding-only + caching."""
     global _embeddings_cache
     if _embeddings_cache is not None:
         return _embeddings_cache
 
-    # รองรับทั้งสอง env name เพื่อความเข้ากันได้
+    # Support both env names for compatibility
     model_name = os.getenv("RAGAS_EMBED_MODEL_EVAL", "") or os.getenv("EVAL_EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
     try:
         from langchain_huggingface import HuggingFaceEmbeddings
@@ -144,7 +145,7 @@ def _build_embeddings():
 # -----------------------------
 def _eval_metrics_seq(dataset, metrics, llm, embeddings) -> Dict[str, Optional[float]]:
     """
-    ประเมินทีละ metric (sequential) + รองรับ RunConfig + งบเวลา 'รวม' ต่อรอบ
+    Evaluate metrics sequentially + supports RunConfig + total time budget per round.
     """
     from ragas import evaluate
     scores: Dict[str, Optional[float]] = {m.name: None for m in metrics}
@@ -161,7 +162,7 @@ def _eval_metrics_seq(dataset, metrics, llm, embeddings) -> Dict[str, Optional[f
         logger.warning("[RAGAS] run_config not available; evaluate() will use defaults")
 
     for m in metrics:
-        # หยุดถ้าเกินงบรวม
+        # Stop if total budget exceeded
         if time.time() - t0 > budget_s:
             logger.warning(f"[RAGAS] budget exceeded before metric {m.name}, skipping.")
             break
@@ -181,10 +182,10 @@ def _eval_metrics_seq(dataset, metrics, llm, embeddings) -> Dict[str, Optional[f
 
 def _ragas_eval_llm(question: str, answer: str, contexts: List[str], llm, embeddings) -> Dict:
     """
-    ใช้ RAGAS LLM-judge:
-    - เลือกบริบท K ชิ้น (พยายามคงบล็อก GT ถ้ามีรูปแบบ Question/Answer)
-    - จัดลำดับ metric: context_precision -> context_recall -> answer_relevancy -> faithfulness
-    - ถ้า metric ไหนไม่ทันงบ/ล้มเหลว เติมค่าประมาณจาก embed-only เพื่อให้ "ครบเสมอ"
+    Use RAGAS LLM-judge:
+    - Select K contexts (try to keep GT block if Question/Answer format exists)
+    - Metric order: context_precision -> context_recall -> answer_relevancy -> faithfulness
+    - If any metric times out/fails, fill with embed-only estimate to "always have complete scores"
     """
     from ragas.metrics import faithfulness, answer_relevancy, context_precision, context_recall
     from datasets import Dataset
@@ -192,7 +193,7 @@ def _ragas_eval_llm(question: str, answer: str, contexts: List[str], llm, embedd
     max_chars = int(os.getenv("RAGAS_CONTEXT_MAX_CHARS", "240"))
     k = int(os.getenv("RAGAS_CONTEXTS_K", "1"))
 
-    # ---- คง GT block ถ้ามี (รูปแบบ Question/Answer ของคำถามเดียวกัน) ----
+    # ---- Keep GT block if present (same Question/Answer format) ----
     gt_block = None
     for c in contexts or []:
         if c.lower().startswith("question:") and "\nanswer:" in c.lower():
@@ -200,10 +201,10 @@ def _ragas_eval_llm(question: str, answer: str, contexts: List[str], llm, embedd
                 gt_block = c[:max_chars]
                 break
 
-    # เลือกบริบท K ชิ้นตามความใกล้ + truncate
+    # Select K contexts by proximity + truncate
     picked = _choose_contexts(question, contexts or [], k=k, max_chars=max_chars)
     if gt_block and gt_block not in picked:
-        # บังคับให้ GT ติดมาด้วย โดยดันตัวท้ายสุดออกหากเกิน K
+        # Force GT to be included by pushing out the last item if exceeds K
         picked = ([gt_block] + picked)[:max(1, k)]
 
     ctx_used = [(c or "")[:max_chars] for c in picked]
@@ -214,7 +215,7 @@ def _ragas_eval_llm(question: str, answer: str, contexts: List[str], llm, embedd
         eo["scores"]["context_recall"] = 0.0
         return {"status": "completed", "scores": eo["scores"]}
 
-    # ---- เตรียม dataset ----
+    # ---- Prepare dataset ----
     data = {
         "question": [question],
         "answer": [answer],
@@ -223,13 +224,13 @@ def _ragas_eval_llm(question: str, answer: str, contexts: List[str], llm, embedd
     }
     ds = Dataset.from_dict(data)
 
-    # ---- จัดลำดับ metric: ให้บริบทมาก่อน ----
+    # ---- Metric order: context metrics first ----
     metrics = [context_precision, context_recall, answer_relevancy, faithfulness]
 
-    # ---- รันตามงบ ----
+    # ---- Run within budget ----
     scores = _eval_metrics_seq(ds, metrics, llm=llm, embeddings=embeddings)
 
-    # ---- เติมค่าประมาณจาก embed-only ถ้า metric ไหนขาด/None ----
+    # ---- Fill missing metrics with embed-only estimates ----
     try:
         eo_scores = _ragas_eval_embed_only(question=question, answer=answer, contexts=ctx_used)["scores"]
         for k_ in ("context_precision", "context_recall", "answer_relevancy", "faithfulness"):
@@ -245,16 +246,21 @@ def _ragas_eval_llm(question: str, answer: str, contexts: List[str], llm, embedd
 # -----------------------------
 def _ragas_eval_embed_only(question: str, answer: str, contexts: List[str]) -> Dict:
     """
-    เวอร์ชันเร็ว (ไม่ใช้ LLM)
+    Fast version (no LLM):
     - faithfulness (approx): cosine(answer, centroid(contexts))
     - answer_relevancy: cosine(answer, question)
-    - context_precision/recall: ใช้ความใกล้กันเชิงเวคเตอร์แบบง่าย
+    - context_precision/recall: simple vector proximity metrics
     """
+    global _fast_embedder_cache
     from sentence_transformers import SentenceTransformer
     import numpy as np
 
-    model_name = os.getenv("RAGAS_EMBED_MODEL_EVAL", "") or os.getenv("EVAL_EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
-    emb = SentenceTransformer(model_name)
+    # Use cached embedder for performance
+    if _fast_embedder_cache is None:
+        model_name = os.getenv("RAGAS_EMBED_MODEL_EVAL", "") or os.getenv("EVAL_EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+        _fast_embedder_cache = SentenceTransformer(model_name)
+    
+    emb = _fast_embedder_cache
 
     def vec(x: Union[List[str], str]):
         xs = x if isinstance(x, list) else [x]
@@ -293,8 +299,8 @@ def _ragas_eval_embed_only(question: str, answer: str, contexts: List[str]) -> D
 # -----------------------------
 def local_ragas_eval(question: str, answer: str, contexts: List[str]) -> Dict[str, Any]:
     """
-    โหมดหลัก: ถ้า ENABLE_RAGAS_LLM=true จะใช้ LLM-judge; ไม่งั้นใช้ embed-only
-    (สำคัญ) ต้องสร้าง llm/embeddings แล้วส่งเข้า _ragas_eval_llm()
+    Main mode: If ENABLE_RAGAS_LLM=true, uses LLM-judge; otherwise uses embed-only.
+    (Important) Must create llm/embeddings then pass to _ragas_eval_llm().
     """
     try:
         if _env_bool("ENABLE_RAGAS_LLM", True):
@@ -308,5 +314,5 @@ def local_ragas_eval(question: str, answer: str, contexts: List[str]) -> Dict[st
 
 
 def simple_ragas_eval(question: str, answer: str, contexts: List[str]) -> Dict[str, Any]:
-    """โหมดเร็ว: embed-only เสมอ"""
+    """Fast mode: Always uses embed-only."""
     return _ragas_eval_embed_only(question, answer, contexts)

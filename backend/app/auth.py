@@ -29,7 +29,7 @@ def verify_password(password: str, hashed: str) -> bool:
 JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret")
 JWT_ALGO = os.getenv("JWT_ALGORITHM", "HS256")
 
-ACCESS_EXPIRE = int(os.getenv("ACCESS_TOKEN_EXPIRE_SECONDS", "900"))
+ACCESS_EXPIRE = int(os.getenv("ACCESS_TOKEN_EXPIRE_SECONDS", "86400"))  # 24 hours
 REFRESH_EXPIRE = int(os.getenv("REFRESH_TOKEN_EXPIRE_SECONDS", "1209600"))
 
 
