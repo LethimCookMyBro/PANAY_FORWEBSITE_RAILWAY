@@ -2,29 +2,245 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --liquid-bg-1: #f7fbff;
+  --liquid-bg-2: #e5eefc;
+  --liquid-bg-3: #d8f2f5;
+  --liquid-stroke: rgba(255, 255, 255, 0.38);
+}
+
+/* ============== SCROLLBAR ============== */
 ::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+  width: 5px;
+  height: 5px;
 }
-
 ::-webkit-scrollbar-track {
-    background: #f1f5f9;
+  background: transparent;
 }
-
 ::-webkit-scrollbar-thumb {
-    background: #cbd5e1;
-    border-radius: 4px;
+  background: rgba(148, 163, 184, 0.3);
+  border-radius: 3px;
 }
-
 ::-webkit-scrollbar-thumb:hover {
-    background: #94a3b8;
+  background: rgba(148, 163, 184, 0.5);
 }
-
 html {
-    scrollbar-width: thin;
-    scrollbar-color: #cbd5e1 #f1f5f9;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.3) transparent;
 }
 
 body {
-    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: "Manrope", "Noto Sans Thai", "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1,
+h2,
+h3 {
+  font-family: "Sora", "Manrope", "Noto Sans Thai", sans-serif;
+  letter-spacing: -0.01em;
+}
+
+/* ============== TYPING DOTS ============== */
+@keyframes typingBounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+  }
+  30% {
+    transform: translateY(-5px);
+  }
+}
+.typing-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #3b82f6, #06b6d4);
+  animation: typingBounce 1.4s ease-in-out infinite;
+}
+.typing-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.typing-dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+/* ============== GRADIENT ANIMATION ============== */
+@keyframes gradientShift {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+.animated-gradient {
+  background-size: 200% 200%;
+  animation: gradientShift 8s ease infinite;
+}
+
+/* ============== LIQUID GLASS ============== */
+.glass {
+  background: rgba(255, 255, 255, 0.66);
+  backdrop-filter: blur(18px) saturate(1.85);
+  -webkit-backdrop-filter: blur(18px) saturate(1.85);
+  border: 1px solid var(--liquid-stroke);
+}
+.glass-dark {
+  background: rgba(10, 20, 36, 0.76);
+  backdrop-filter: blur(20px) saturate(1.8);
+  -webkit-backdrop-filter: blur(20px) saturate(1.8);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+}
+.glass-input {
+  background: rgba(255, 255, 255, 0.84);
+  backdrop-filter: blur(16px) saturate(1.7);
+  -webkit-backdrop-filter: blur(16px) saturate(1.7);
+  border: 1px solid rgba(148, 163, 184, 0.23);
+  transition: all 0.25s ease;
+}
+.glass-input:focus-within {
+  background: rgba(255, 255, 255, 0.96);
+  border-color: rgba(34, 124, 255, 0.33);
+  box-shadow:
+    0 0 0 3px rgba(34, 124, 255, 0.09),
+    0 12px 30px rgba(15, 23, 42, 0.1);
+}
+.glass-prompt {
+  background: rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  transition: all 0.2s ease;
+}
+.glass-prompt:hover {
+  background: rgba(255, 255, 255, 0.85);
+  border-color: rgba(59, 130, 246, 0.2);
+  box-shadow: 0 2px 12px rgba(59, 130, 246, 0.08);
+}
+
+/* ============== FADE-IN ============== */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.fade-in-up {
+  animation: fadeInUp 0.3s ease-out both;
+}
+
+@keyframes driftFloat {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(0, -12px, 0) scale(1.02);
+  }
+}
+
+.liquid-shell {
+  background:
+    radial-gradient(1400px 800px at 0% 0%, var(--liquid-bg-3) 0%, transparent 60%),
+    radial-gradient(1200px 900px at 100% 100%, #dbe5ff 0%, transparent 62%),
+    linear-gradient(135deg, var(--liquid-bg-1) 0%, var(--liquid-bg-2) 100%);
+}
+
+.liquid-orb {
+  position: absolute;
+  border-radius: 999px;
+  filter: blur(42px);
+  opacity: 0.5;
+  pointer-events: none;
+  animation: driftFloat 9s ease-in-out infinite;
+}
+
+.liquid-orb-a {
+  width: 22rem;
+  height: 22rem;
+  top: -5rem;
+  left: -4rem;
+  background: rgba(56, 189, 248, 0.35);
+}
+
+.liquid-orb-b {
+  width: 20rem;
+  height: 20rem;
+  right: -6rem;
+  top: 18%;
+  background: rgba(96, 165, 250, 0.32);
+  animation-delay: 1.5s;
+}
+
+.liquid-orb-c {
+  width: 24rem;
+  height: 24rem;
+  bottom: -7rem;
+  left: 35%;
+  background: rgba(45, 212, 191, 0.26);
+  animation-delay: 0.8s;
+}
+
+.liquid-input-wrap {
+  position: relative;
+}
+
+.liquid-input-wrap::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 1.5rem;
+  background: linear-gradient(
+    130deg,
+    rgba(255, 255, 255, 0.4),
+    rgba(255, 255, 255, 0.05)
+  );
+  pointer-events: none;
+}
+
+.composer-textarea {
+  min-height: 44px;
+  max-height: 180px;
+  line-height: 1.5;
+}
+
+.composer-textarea::-webkit-scrollbar {
+  width: 4px;
+}
+
+/* ============== PULSE GLOW ============== */
+@keyframes pulseGlow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.25);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(59, 130, 246, 0);
+  }
+}
+.pulse-glow {
+  animation: pulseGlow 2s ease-in-out infinite;
+}
+
+/* ============== SIDEBAR SCROLL ============== */
+.sidebar-scroll::-webkit-scrollbar {
+  width: 3px;
+}
+.sidebar-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.sidebar-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
 }

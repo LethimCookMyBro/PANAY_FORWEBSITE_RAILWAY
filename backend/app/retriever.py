@@ -2,7 +2,7 @@ import os
 import json
 import logging
 import re
-from typing import List, Any, Tuple
+from typing import List, Any, Tuple, Optional
 
 from pydantic import Field
 from langchain_core.retrievers import BaseRetriever
@@ -113,6 +113,7 @@ class EnhancedFlashrankRerankRetriever(BaseRetriever):
     """
     base_retriever: BaseRetriever = Field(...)
     top_n: int = Field(default_factory=lambda: _env_int("RERANK_TOPN", 8))
+    prefetched_docs: Optional[List[Document]] = Field(default=None)
 
     # Domain-specific keywords for boosting
     _PLC_TERMS = [
@@ -189,8 +190,8 @@ class EnhancedFlashrankRerankRetriever(BaseRetriever):
         return boosted
 
     def _get_relevant_documents(self, query: str) -> List[Document]:
-        # Use invoke() instead of deprecated get_relevant_documents()
-        cand = self.base_retriever.invoke(query) or []
+        # Reuse candidates if caller already fetched them to avoid duplicate DB retrieval.
+        cand = list(self.prefetched_docs) if self.prefetched_docs is not None else (self.base_retriever.invoke(query) or [])
         if not cand:
             return []
         # Limit candidates sent to Flashrank for speed/stability
@@ -214,8 +215,8 @@ class NoRerankRetriever(BaseRetriever):
     """
     base_retriever: BaseRetriever = Field(...)
     top_n: int = Field(default=8)
+    prefetched_docs: Optional[List[Document]] = Field(default=None)
 
     def _get_relevant_documents(self, query: str) -> List[Document]:
-        # Use invoke() instead of deprecated get_relevant_documents()
-        docs = self.base_retriever.invoke(query) or []
+        docs = list(self.prefetched_docs) if self.prefetched_docs is not None else (self.base_retriever.invoke(query) or [])
         return docs[: self.top_n]

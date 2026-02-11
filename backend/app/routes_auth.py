@@ -51,7 +51,7 @@ class LoginIn(BaseModel):
 @router.post("/register")
 def register(payload: RegisterIn):
     if get_user_by_email(payload.email):
-        raise HTTPException(status_code=400, detail="Email already registered")
+        raise HTTPException(status_code=409, detail="Email already registered")
 
     pwd_hash = hash_password(payload.password)
     user = create_user(

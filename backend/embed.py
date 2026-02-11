@@ -221,7 +221,7 @@ def main():
                 chunks = create_json_qa_chunks(file_path)
             elif file_path.lower().endswith('.pdf'):
                 try:
-                    loader = DoclingLoader(file_path=file_path, export_type=ExportType.MARKDOWN)
+                    loader = DoclingLoader(file_path=file_path, export_type=ExportType.DOC_CHUNKS)
                     pages = loader.load()
                     chunks = create_pdf_chunks(
                         pages,

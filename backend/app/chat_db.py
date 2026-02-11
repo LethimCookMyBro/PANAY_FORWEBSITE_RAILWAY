@@ -184,7 +184,7 @@ def get_chat_messages(
             # Get messages with pagination (newest first, then reverse for display)
             cur.execute(
                 """
-                SELECT m.role, m.content, m.created_at, m.metadata
+                SELECT m.role, m.content, m.created_at, COALESCE(m.metadata, '{}'::jsonb) AS metadata
                 FROM chat_messages m
                 JOIN chat_sessions s ON m.session_id = s.id
                 WHERE m.session_id = %s AND s.user_id = %s
@@ -210,5 +210,51 @@ def get_chat_messages(
             "total": total,
             "has_more": (offset + limit) < total,
         }
+    finally:
+        db_pool.putconn(conn)
+
+
+def get_user_chat_history(
+    db_pool,
+    user_id: int,
+    limit: int = 20,
+    offset: int = 0,
+) -> List[Dict]:
+    """
+    Get a user's chat history across sessions (newest messages first).
+    """
+    conn = db_pool.getconn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    s.id AS session_id,
+                    s.title AS session_title,
+                    m.role,
+                    m.content,
+                    m.created_at,
+                    COALESCE(m.metadata, '{}'::jsonb) AS metadata
+                FROM chat_messages m
+                JOIN chat_sessions s ON m.session_id = s.id
+                WHERE s.user_id = %s
+                ORDER BY m.created_at DESC
+                LIMIT %s OFFSET %s
+                """,
+                (user_id, limit, offset),
+            )
+            rows = cur.fetchall()
+
+        return [
+            {
+                "session_id": r[0],
+                "session_title": r[1],
+                "role": r[2],
+                "content": r[3],
+                "created_at": r[4],
+                "metadata": r[5] if r[5] else {},
+            }
+            for r in rows
+        ]
     finally:
         db_pool.putconn(conn)

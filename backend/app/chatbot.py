@@ -9,6 +9,7 @@ import math
 import logging
 import re
 import time
+import os
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -35,6 +36,13 @@ SKIP_RAGAS_PATTERNS = [
     "thank you", "thanks", "bye", "goodbye", "see you",
     "how are you", "what can you do", "help me", "what is panya",
 ]
+
+
+def _env_bool(key: str, default: bool = False) -> bool:
+    val = os.getenv(key)
+    if val is None:
+        return default
+    return str(val).strip().lower() in ("1", "true", "yes", "y", "on")
 
 
 # ============================================================
@@ -420,7 +428,14 @@ def answer_question(
     # ============ RERANKING PHASE ============
     t_rerank_start = time.perf_counter()
     
-    reranker = reranker_class(base_retriever=base_retriever)
+    try:
+        reranker = reranker_class(
+            base_retriever=base_retriever,
+            prefetched_docs=raw_retrieved_docs,
+        )
+    except TypeError:
+        # Backward compatibility for custom rerankers without prefetched_docs.
+        reranker = reranker_class(base_retriever=base_retriever)
     retrieved_docs = reranker.invoke(processed_msg) or []
     selected_docs = select_context_docs(retrieved_docs)
     
@@ -486,52 +501,50 @@ def answer_question(
 
     # ============ RAGAS EVALUATION ============
     ragas_scores = None
-    low_quality_response = False
-    
-    # Check if this is an identity/greeting question that should skip RAGAS check
-    question_lower = question.lower()
-    skip_ragas_check = any(pattern in question_lower for pattern in SKIP_RAGAS_PATTERNS)
-    
-    try:
-        from app.ragas_eval import simple_ragas_eval
-        ragas_scores = simple_ragas_eval(
-            question=question,
-            answer=reply,
-            contexts=context_texts
-        )
-        
-        # Check if quality is too low (but skip for identity/greeting questions)
-        if not skip_ragas_check and ragas_scores and ragas_scores.get("scores"):
-            scores = ragas_scores["scores"]
-            # Get scores that are not None
-            quality_scores = []
-            for key in ["faithfulness", "context_precision", "context_recall"]:
-                val = scores.get(key)
-                if val is not None:
-                    quality_scores.append(val)
-            
-            # Calculate average quality
-            if quality_scores:
-                avg_quality = sum(quality_scores) / len(quality_scores)
-                if avg_quality < RAGAS_MIN_THRESHOLD:
-                    low_quality_response = True
-                    original_reply = reply
-                    reply = (
-                        "I'm sorry, but I don't have enough reliable information in my documents "
-                        "to answer this question accurately. The context I found may not be "
-                        "relevant or sufficient.\n\n"
-                        "**Please try:**\n"
-                        "• Rephrasing your question\n"
-                        "• Asking about a more specific topic\n"
-                        "• Checking if the topic is covered in the documentation"
-                    )
-                    logger.warning(
-                        f"⚠️ Low quality response detected (avg={avg_quality:.2f} < {RAGAS_MIN_THRESHOLD}). "
-                        f"Replacing with 'I don't know' message."
-                    )
-    except Exception as e:
-        logger.warning(f"RAGAS evaluation failed: {e}")
-        ragas_scores = None
+    enable_chat_ragas = _env_bool("ENABLE_CHAT_RAGAS", False)
+
+    if enable_chat_ragas and context_texts:
+        # Check if this is an identity/greeting question that should skip RAGAS check
+        question_lower = question.lower()
+        skip_ragas_check = any(pattern in question_lower for pattern in SKIP_RAGAS_PATTERNS)
+
+        try:
+            from app.ragas_eval import simple_ragas_eval
+
+            ragas_scores = simple_ragas_eval(
+                question=question,
+                answer=reply,
+                contexts=context_texts,
+            )
+
+            # Check if quality is too low (but skip for identity/greeting questions)
+            if not skip_ragas_check and ragas_scores and ragas_scores.get("scores"):
+                scores = ragas_scores["scores"]
+                quality_scores = []
+                for key in ["faithfulness", "context_precision", "context_recall"]:
+                    val = scores.get(key)
+                    if val is not None:
+                        quality_scores.append(val)
+
+                if quality_scores:
+                    avg_quality = sum(quality_scores) / len(quality_scores)
+                    if avg_quality < RAGAS_MIN_THRESHOLD:
+                        reply = (
+                            "I'm sorry, but I don't have enough reliable information in my documents "
+                            "to answer this question accurately. The context I found may not be "
+                            "relevant or sufficient.\n\n"
+                            "**Please try:**\n"
+                            "• Rephrasing your question\n"
+                            "• Asking about a more specific topic\n"
+                            "• Checking if the topic is covered in the documentation"
+                        )
+                        logger.warning(
+                            f"⚠️ Low quality response detected (avg={avg_quality:.2f} < {RAGAS_MIN_THRESHOLD}). "
+                            f"Replacing with 'I don't know' message."
+                        )
+        except Exception as e:
+            logger.warning(f"RAGAS evaluation failed: {e}")
+            ragas_scores = None
 
     total_time = time.perf_counter() - t0
 

@@ -49,7 +49,7 @@ import numpy as np
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Form, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from langchain_ollama import OllamaLLM
 from sentence_transformers import SentenceTransformer
@@ -57,10 +57,11 @@ from psycopg2 import pool
 import pytesseract
 from PIL import Image
 
-from app.db import init_db_pool
+from app.db import init_db_pool, ensure_schema
 from app.routes_auth import router as auth_router
 from app.routes_chat import router as chat_router
 from app.routes_auth import get_current_user
+from app.chat_db import get_user_chat_history
 
 # Local imports
 from app.retriever import (
@@ -331,32 +332,43 @@ def ensure_model(model_name: str) -> bool:
         return False
 
 
-def test_database_connection() -> bool:
-    """Test database connection and verify pgvector extension"""
+def test_database_connection(db_pool=None) -> bool:
+    """Test database connectivity and core schema availability."""
+    conn = None
     try:
-        import psycopg2
-        conn = psycopg2.connect(config.DATABASE_URL)
-        cur = conn.cursor()
-        
-        # Check pgvector extension
-        cur.execute("SELECT extname FROM pg_extension WHERE extname = 'vector';")
-        if not cur.fetchone():
-            logger.error("❌ pgvector extension not found!")
-            return False
-        
-        # Get document count
-        cur.execute("SELECT COUNT(*) FROM documents;")
-        doc_count = cur.fetchone()[0]
-        
+        if db_pool is not None:
+            conn = db_pool.getconn()
+        else:
+            import psycopg2
+
+            conn = psycopg2.connect(config.DATABASE_URL)
+
+        with conn.cursor() as cur:
+            cur.execute("SELECT extname FROM pg_extension WHERE extname = 'vector';")
+            if not cur.fetchone():
+                logger.error("❌ pgvector extension not found!")
+                return False
+
+            cur.execute("SELECT to_regclass('public.documents');")
+            has_documents = cur.fetchone()[0] is not None
+
+            doc_count = 0
+            if has_documents:
+                cur.execute("SELECT COUNT(*) FROM documents;")
+                doc_count = cur.fetchone()[0]
+
         logger.info(f"✅ Database connected. Documents: {doc_count}")
-        
-        cur.close()
-        conn.close()
         return True
-        
+
     except Exception as e:
         logger.error(f"🔥 Database connection failed: {e}")
         return False
+    finally:
+        if conn is not None:
+            if db_pool is not None:
+                db_pool.putconn(conn)
+            else:
+                conn.close()
 
 
 # ============================================================================
@@ -555,17 +567,19 @@ async def lifespan(app: FastAPI):
     
     # Initialize database pool
     try:
-        if test_database_connection():
-            # init_db_pool() creates and returns SimpleConnectionPool as defined in backend/app/db.py
-            db_pool = init_db_pool()
-            app.state.db_pool = db_pool
-            logger.info("✅ Database connection pool created via init_db_pool()")
-        else:
-            app.state.db_pool = None
-            logger.error("❌ test_database_connection() failed — db_pool not created")
+        # init_db_pool() creates and returns SimpleConnectionPool as defined in backend/app/db.py
+        db_pool = init_db_pool()
+        app.state.db_pool = db_pool
+        logger.info("✅ Database connection pool created via init_db_pool()")
+
+        ensure_schema(db_pool)
+        logger.info("✅ Database migration check complete")
+
+        if not test_database_connection(db_pool):
+            raise RuntimeError("Database health check failed during startup")
     except Exception as e:
-        logger.error(f"🔥 Failed to initialize DB pool via init_db_pool(): {e}", exc_info=True)
-        app.state.db_pool = None
+        logger.error(f"🔥 Failed to initialize DB/migrations: {e}", exc_info=True)
+        raise RuntimeError("Backend startup aborted due to database initialization error") from e
     
     # Initialize LLM
     app.state.llm = None
@@ -625,8 +639,14 @@ app = FastAPI(
 app.include_router(auth_router)
 app.include_router(chat_router)
 
-# CORS middleware - tightened for security
-CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173").split(",")
+# CORS middleware - supports Railway and local development
+CORS_ORIGINS = os.getenv(
+    "CORS_ORIGINS",
+    "http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173"
+).split(",")
+# Add wildcard for Railway domains if not already configured
+if not any(".railway.app" in origin for origin in CORS_ORIGINS):
+    CORS_ORIGINS.append("https://*.railway.app")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
@@ -701,11 +721,6 @@ async def general_exception_handler(request: Request, exc: Exception):
 # PYDANTIC MODELS
 # ============================================================================
 
-class ChatRequest(BaseModel):
-    message: str
-    collection: str = Field(default="plcnext")
-
-
 class ChatResponse(BaseModel):
     reply: str
     processing_time: Optional[float] = None
@@ -725,9 +740,7 @@ class HealthResponse(BaseModel):
 # API ENDPOINTS
 # ============================================================================
 
-@app.on_event("startup")
-def on_startup():
-    init_db_pool()
+# NOTE: init_db_pool() is already called in lifespan() — do NOT duplicate here
 
 @app.get("/", tags=["Info"])
 def root():
@@ -789,39 +802,6 @@ def health_check(request: Request):
         services=services,
         timestamp=time.strftime("%Y-%m-%d %H:%M:%S")
     )
-
-
-@app.post("/api/chat", response_model=ChatResponse, tags=["Chat"])
-def chat(
-    request: Request,
-    chat_request: ChatRequest,
-    current_user=Depends(get_current_user),
-):
-    db_pool = request.app.state.db_pool
-    llm = request.app.state.llm
-    embedder = request.app.state.embedder
-
-    if not db_pool:
-        raise HTTPException(status_code=503, detail="Database not available")
-    if not llm:
-        raise HTTPException(status_code=503, detail="LLM not available")
-    if not embedder:
-        raise HTTPException(status_code=503, detail="Embedder not available")
-
-    result = answer_question(
-        question=chat_request.message,   # Use message from request
-        db_pool=db_pool,
-        llm=llm,
-        embedder=embedder,
-        collection=chat_request.collection,
-        retriever_class=PostgresVectorRetriever,
-        reranker_class=EnhancedFlashrankRerankRetriever,
-    )
-
-    # NOTE: Chat history is handled by routes_chat.py when using /api/chat/sessions
-    # This endpoint is for stateless chat - no history saving needed here
-
-    return ChatResponse(**sanitize_json(result))
 
 
 @app.post("/api/agent-chat", tags=["Chat"])
@@ -1044,11 +1024,17 @@ def chat_image(
 
 @app.get("/api/chat/history", tags=["Chat"])
 def chat_history(
+    request: Request,
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     current_user=Depends(get_current_user),
 ):
-    history = get_chat_history(
+    db_pool = request.app.state.db_pool
+    if not db_pool:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    history = get_user_chat_history(
+        db_pool=db_pool,
         user_id=current_user["id"],
         limit=limit,
         offset=offset,

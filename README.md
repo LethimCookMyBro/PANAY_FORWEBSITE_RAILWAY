@@ -31,8 +31,8 @@ An AI-powered chatbot for **industrial automation** and **PLCnext** technical su
 
 ```bash
 # 1. Clone the repository
-git clone <your-repo-url>
-cd new-chat-bot
+git clone https://github.com/MetasitKaewsritong/Panya.git
+cd Panya
 
 # 2. Create environment file
 cp .env.example .env

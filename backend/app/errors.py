@@ -68,6 +68,7 @@ class ErrorResponse(BaseModel):
     error: bool = True
     code: str
     message: str
+    detail: Optional[str] = None
     request_id: Optional[str] = None
     details: Optional[Dict[str, Any]] = None
 
@@ -149,6 +150,7 @@ def create_error_response(
         content=ErrorResponse(
             code=code,
             message=message,
+            detail=message,
             request_id=request_id,
             details=details
         ).model_dump()

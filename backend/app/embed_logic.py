@@ -2,7 +2,7 @@ import os
 import re
 import json
 import logging
-from typing import List
+from typing import List, Any, Dict, Optional, Set
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sentence_transformers import SentenceTransformer
@@ -134,6 +134,146 @@ def is_valid_chunk(chunk: Document) -> tuple[bool, str]:
     return True, "ok"
 
 
+_PAGE_KEYS = {
+    "page",
+    "page_no",
+    "page_number",
+    "page_num",
+    "page_id",
+    "pageindex",
+    "page_index",
+    "pageidx",
+    "page_idx",
+    "start_page",
+    "end_page",
+}
+_ZERO_BASED_PAGE_KEYS = {"pageindex", "page_index", "pageidx", "page_idx"}
+
+
+def _coerce_int(value: Any) -> Optional[int]:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        match = re.search(r"-?\d+", value.strip())
+        if match:
+            try:
+                return int(match.group(0))
+            except Exception:
+                return None
+    return None
+
+
+def _as_mapping(value: Any) -> Optional[Dict[str, Any]]:
+    if isinstance(value, dict):
+        return value
+    for attr in ("model_dump", "dict"):
+        fn = getattr(value, attr, None)
+        if callable(fn):
+            try:
+                mapped = fn()
+                if isinstance(mapped, dict):
+                    return mapped
+            except Exception:
+                pass
+    raw = getattr(value, "__dict__", None)
+    if isinstance(raw, dict):
+        return raw
+    return None
+
+
+def _normalize_page_candidate(raw_page: Optional[int], key_name: str) -> Optional[int]:
+    if raw_page is None:
+        return None
+    if key_name in _ZERO_BASED_PAGE_KEYS and raw_page >= 0:
+        raw_page += 1
+    if raw_page <= 0:
+        return None
+    return raw_page
+
+
+def _walk_for_page_candidate(value: Any, seen: Set[int], depth: int = 0) -> Optional[int]:
+    if value is None or depth > 10:
+        return None
+
+    obj_id = id(value)
+    if obj_id in seen:
+        return None
+    seen.add(obj_id)
+
+    mapping = _as_mapping(value)
+    if mapping is not None:
+        ordered_items = sorted(
+            mapping.items(),
+            key=lambda kv: 0 if str(kv[0]).lower() in _PAGE_KEYS else 1,
+        )
+        for key, item in ordered_items:
+            key_lower = str(key).lower()
+            if key_lower in _PAGE_KEYS:
+                candidate = _normalize_page_candidate(_coerce_int(item), key_lower)
+                if candidate is not None:
+                    return candidate
+            nested = _walk_for_page_candidate(item, seen, depth + 1)
+            if nested is not None:
+                return nested
+        return None
+
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            nested = _walk_for_page_candidate(item, seen, depth + 1)
+            if nested is not None:
+                return nested
+        return None
+
+    return None
+
+
+def _extract_page_from_text(text: str) -> Optional[int]:
+    if not text:
+        return None
+
+    snippet = text[:1000]
+    patterns = [
+        r"---\s*PAGE\s*(\d{1,5})\s*---",
+        r"\bpage\s*[:#-]?\s*(\d{1,5})\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, snippet, flags=re.IGNORECASE)
+        if match:
+            page = _coerce_int(match.group(1))
+            if page is not None and page > 0:
+                return page
+    return None
+
+
+def extract_page_number(doc_metadata: dict, chunk_text: str = "") -> int:
+    """
+    Extract page number from Docling metadata with robust fallback strategy.
+    Returns 0 only when no page number can be inferred.
+    """
+    metadata = doc_metadata or {}
+
+    direct_candidate = _normalize_page_candidate(
+        _coerce_int(metadata.get("page")),
+        "page",
+    )
+    if direct_candidate is not None:
+        return direct_candidate
+
+    recursive_candidate = _walk_for_page_candidate(metadata, seen=set())
+    if recursive_candidate is not None:
+        return recursive_candidate
+
+    text_candidate = _extract_page_from_text(chunk_text)
+    if text_candidate is not None:
+        return text_candidate
+
+    return 0
+
+
 def enhance_metadata(metadata: dict, chunk_content: str) -> dict:
     """Add useful metadata to chunk"""
     enhanced_meta = metadata.copy()
@@ -141,6 +281,14 @@ def enhance_metadata(metadata: dict, chunk_content: str) -> dict:
         "char_count": len(chunk_content),
         "word_count": len(chunk_content.split()),
     })
+
+    source = enhanced_meta.get("source")
+    if isinstance(source, str) and source:
+        enhanced_meta["source"] = os.path.basename(source)
+
+    page = _coerce_int(enhanced_meta.get("page"))
+    enhanced_meta["page"] = page if page is not None and page > 0 else 0
+
     return enhanced_meta
 
 
@@ -268,9 +416,8 @@ def create_pdf_chunks(
         page_content = doc.page_content
         page_metadata = doc.metadata or {}
         source = page_metadata.get('source', 'unknown')
-        # Note: Docling with MARKDOWN export doesn't provide per-page metadata
-        # Page will be 0 for all chunks. Use DOC_CHUNKS export type for page info.
-        page_number = page_metadata.get('page', 0)
+        # Extract real page number from Docling metadata (DOC_CHUNKS export)
+        page_number = extract_page_number(page_metadata, page_content)
         file_label = get_file_label(source)
         
         # Key-Value Extraction Logic

@@ -9,7 +9,8 @@ CREATE TABLE IF NOT EXISTS documents (
     collection VARCHAR(255) NOT NULL,
     hash VARCHAR(64) UNIQUE NOT NULL, -- ใช้สำหรับป้องกันข้อมูลซ้ำซ้อน (sha256)
     -- ขนาดของ Vector (1024) ต้องตรงกับโมเดลที่ใช้ (BAAI/bge-m3)
-    embedding VECTOR(1024)
+    embedding VECTOR(1024),
+    created_at TIMESTAMPTZ DEFAULT now()
 );
 
 -- 3. สร้าง Index เพื่อเพิ่มความเร็วในการค้นหาข้อมูล Vector (แนะนำ)
