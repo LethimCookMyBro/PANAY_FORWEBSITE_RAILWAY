@@ -177,6 +177,8 @@ curl -i -X POST https://<frontend-service>.up.railway.app/api/chat \
 
 Expected: backend JSON responses (`401`/`422` are acceptable), not HTML and not frontend `404`.
 
+If `/api/*` returns `431 Request Header Fields Too Large`, the frontend proxy target usually points to the frontend itself, causing a proxy loop. Set `API_PROXY_TARGET` to the backend service domain.
+
 ## License
 
 MIT License

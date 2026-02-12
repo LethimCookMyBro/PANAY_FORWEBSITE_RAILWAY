@@ -52,3 +52,5 @@ curl -i -X POST https://<frontend-service>.up.railway.app/api/chat \
 Expected: JSON responses from backend (`401`/`422` is fine), not HTML and not frontend `404`.
 
 If you see `API returned HTML instead of JSON`, frontend is still not proxying to backend correctly.
+
+If you see `431 Request Header Fields Too Large` on `/api/*`, your proxy target is likely pointing back to the frontend domain (self-loop). Set `API_PROXY_TARGET` to the backend Railway domain.

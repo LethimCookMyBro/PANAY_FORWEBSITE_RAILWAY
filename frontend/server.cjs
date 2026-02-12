@@ -9,8 +9,23 @@ const apiTarget =
   process.env.API_PROXY_TARGET ||
   process.env.BACKEND_URL ||
   process.env.BACKEND_API_URL ||
-  process.env.VITE_API_URL ||
   "http://localhost:5000";
+
+const targetHost = (() => {
+  try {
+    return new URL(apiTarget).host.toLowerCase();
+  } catch {
+    return "";
+  }
+})();
+
+const selfHost = (process.env.RAILWAY_PUBLIC_DOMAIN || "").toLowerCase();
+if (targetHost && selfHost && targetHost === selfHost) {
+  console.error(
+    `[frontend] API proxy loop: API_PROXY_TARGET points to this frontend domain (${selfHost}). Set it to the backend service domain.`,
+  );
+  process.exit(1);
+}
 
 const distDir = path.join(__dirname, "dist");
 const indexFile = path.join(distDir, "index.html");
