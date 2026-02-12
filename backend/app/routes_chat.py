@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional
@@ -22,6 +24,43 @@ from app.retriever import (
 from app.utils import get_llm
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
+logger = logging.getLogger(__name__)
+
+
+def _build_llm_unavailable_reply() -> str:
+    return (
+        "The AI model service is not ready yet, so I can't answer right now.\n\n"
+        "Please check deployment settings:\n"
+        "1. Ensure OLLAMA_BASE_URL points to a reachable Ollama service\n"
+        "2. Ensure OLLAMA_MODEL is pulled on that service\n"
+        "3. Retry after the model is ready"
+    )
+
+
+def _build_service_error_reply() -> str:
+    return (
+        "I hit a backend error while generating the answer.\n\n"
+        "Please try again in a few seconds. If it keeps happening, check backend logs."
+    )
+
+
+def _answer_direct_llm(llm, message: str, chat_history: list) -> str:
+    history_lines = []
+    for m in (chat_history or [])[-6:]:
+        role = "User" if m.get("role") == "user" else "Assistant"
+        content = (m.get("content") or "")[:300]
+        if content:
+            history_lines.append(f"{role}: {content}")
+    history_block = "\n".join(history_lines)
+
+    prompt = (
+        "You are Panya, an industrial automation assistant.\n"
+        "Answer clearly and concisely in English.\n\n"
+        f"{'Conversation history:\n' + history_block + '\n\n' if history_block else ''}"
+        f"User question: {message}\n\n"
+        "Answer:"
+    )
+    return str(llm.invoke(prompt)).strip()
 
 
 # =========================
@@ -51,21 +90,31 @@ def chat(
     current_user: dict = Depends(get_current_user),
 ):
     db_pool = get_db_pool()
+    message = (payload.message or "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+
     llm = get_llm()
-    embedder = get_embedder()
+    embedder = None
+    try:
+        embedder = get_embedder()
+    except Exception as e:
+        logger.warning("Embedder unavailable, will use direct LLM fallback: %s", e)
 
     # 1) Create session if not provided
     if payload.session_id is None:
         session_id = create_chat_session(
             db_pool=db_pool,
             user_id=current_user["id"],
-            title=payload.message[:50],
+            title=message[:50],
         )
         chat_history = []  # New session, no history
     else:
         session_id = payload.session_id
         # Fetch recent messages for context (last 10 messages = 5 exchanges)
         result = get_chat_messages(db_pool, session_id, current_user["id"])
+        if result is None:
+            raise HTTPException(status_code=404, detail="Chat session not found")
         messages = result.get("items", []) if result else []
         chat_history = [{"role": m["role"], "content": m["content"]} for m in messages[-10:]]
 
@@ -74,23 +123,57 @@ def chat(
         db_pool=db_pool,
         session_id=session_id,
         role="user",
-        content=payload.message,
+        content=message,
     )
 
     # 3) Ask LLM with chat history for context
-    result = answer_question(
-        question=payload.message,
-        db_pool=db_pool,
-        llm=llm,
-        embedder=embedder,
-        collection=payload.collection,
-        retriever_class=PostgresVectorRetriever,
-        reranker_class=EnhancedFlashrankRerankRetriever,
-        chat_history=chat_history,  # Pass conversation history
-    )
+    if llm is None:
+        result = {
+            "reply": _build_llm_unavailable_reply(),
+            "processing_time": 0.0,
+            "ragas": None,
+            "retrieval_time": 0.0,
+            "context_count": 0,
+            "max_score": None,
+            "metadata": {"error": "llm_unavailable"},
+        }
+    else:
+        try:
+            if embedder is not None:
+                result = answer_question(
+                    question=message,
+                    db_pool=db_pool,
+                    llm=llm,
+                    embedder=embedder,
+                    collection=payload.collection,
+                    retriever_class=PostgresVectorRetriever,
+                    reranker_class=EnhancedFlashrankRerankRetriever,
+                    chat_history=chat_history,  # Pass conversation history
+                )
+            else:
+                reply = _answer_direct_llm(llm, message, chat_history)
+                result = {
+                    "reply": reply,
+                    "processing_time": 0.0,
+                    "ragas": None,
+                    "retrieval_time": 0.0,
+                    "context_count": 0,
+                    "max_score": None,
+                }
+        except Exception as e:
+            logger.error("Chat generation failed: %s", e, exc_info=True)
+            result = {
+                "reply": _build_service_error_reply(),
+                "processing_time": 0.0,
+                "ragas": None,
+                "retrieval_time": 0.0,
+                "context_count": 0,
+                "max_score": None,
+                "metadata": {"error": "generation_failed", "detail": str(e)},
+            }
 
-    if "reply" not in result:
-        raise HTTPException(status_code=500, detail="LLM did not return a reply")
+    if "reply" not in result or not str(result.get("reply", "")).strip():
+        result["reply"] = _build_service_error_reply()
 
     # 4) Save ASSISTANT message with metrics
     insert_chat_message(
@@ -101,6 +184,7 @@ def chat(
         metadata={
             "processing_time": result.get("processing_time", 0.0),
             "ragas": result.get("ragas"),
+            "error": (result.get("metadata") or {}).get("error"),
         },
     )
 
@@ -113,6 +197,7 @@ def chat(
             "retrieval_time": result.get("retrieval_time", 0.0),
             "context_count": result.get("context_count", 0),
             "max_score": result.get("max_score"),
+            "error": (result.get("metadata") or {}).get("error"),
         },
     }
 

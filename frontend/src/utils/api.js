@@ -6,6 +6,7 @@
 import axios from "axios";
 
 const API_URL = import.meta.env.VITE_API_URL || "";
+const API_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS || 180000);
 
 export const getApiErrorMessage = (error, fallback = "Request failed") => {
   const data = error?.response?.data;
@@ -43,6 +44,7 @@ export const getApiErrorMessage = (error, fallback = "Request failed") => {
 const api = axios.create({
   baseURL: API_URL,
   withCredentials: true,
+  timeout: API_TIMEOUT_MS,
   headers: {
     "Content-Type": "application/json",
   },
@@ -51,6 +53,7 @@ const api = axios.create({
 const refreshClient = axios.create({
   baseURL: API_URL,
   withCredentials: true,
+  timeout: API_TIMEOUT_MS,
   headers: {
     "Content-Type": "application/json",
   },

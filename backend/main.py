@@ -62,6 +62,7 @@ from app.routes_auth import router as auth_router
 from app.routes_chat import router as chat_router
 from app.routes_auth import get_current_user
 from app.chat_db import get_user_chat_history
+from app.seed import seed_golden_qa_if_empty, should_auto_seed
 
 # Local imports
 from app.retriever import (
@@ -604,6 +605,19 @@ async def lifespan(app: FastAPI):
         logger.info(f"✅ Embedder loaded: {config.EMBED_MODEL_NAME}")
     except Exception as e:
         logger.error(f"🔥 Failed to load embedder: {e}")
+
+    # Optional bootstrap seeding so fresh deployments can answer from bundled QA data.
+    if should_auto_seed() and app.state.embedder is not None:
+        try:
+            seed_result = seed_golden_qa_if_empty(
+                db_pool=app.state.db_pool,
+                embedder=app.state.embedder,
+                collection=config.DEFAULT_COLLECTION,
+                json_path=os.getenv("GOLDEN_QA_PATH", "/app/data/Knowledge/golden_qa.json"),
+            )
+            logger.info(f"🌱 Golden QA seed result: {seed_result}")
+        except Exception as e:
+            logger.error(f"🔥 Golden QA auto-seed failed: {e}", exc_info=True)
     
     logger.info("🎉 Application startup complete")
     
@@ -644,12 +658,13 @@ CORS_ORIGINS = os.getenv(
     "CORS_ORIGINS",
     "http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173"
 ).split(",")
-# Add wildcard for Railway domains if not already configured
-if not any(".railway.app" in origin for origin in CORS_ORIGINS):
-    CORS_ORIGINS.append("https://*.railway.app")
+# Normalize and support Railway wildcard subdomains via regex.
+CORS_ORIGINS = [origin.strip() for origin in CORS_ORIGINS if origin.strip()]
+RAILWAY_ORIGIN_REGEX = r"^https://.*\.railway\.app$"
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
+    allow_origin_regex=RAILWAY_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=["*"]
@@ -1108,10 +1123,11 @@ def get_stats(request: Request):
 
 if __name__ == "__main__":
     import uvicorn
+    port = int(os.getenv("PORT", "5000"))
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=5000,
+        port=port,
         reload=False,
         workers=1
     )

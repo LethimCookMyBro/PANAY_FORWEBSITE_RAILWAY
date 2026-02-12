@@ -19,4 +19,4 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 COPY . .
 
 EXPOSE 5000
-CMD ["uvicorn","main:app","--host","0.0.0.0","--port","5000","--loop","asyncio"]
+CMD ["sh","-c","uvicorn main:app --host 0.0.0.0 --port ${PORT:-5000} --loop asyncio"]

@@ -38,6 +38,24 @@ SKIP_RAGAS_PATTERNS = [
 ]
 
 
+def _looks_broken_reply(text: Any) -> bool:
+    """
+    Detect obviously broken model outputs (empty/punctuation-only such as '=')
+    so the UI does not get unusable replies.
+    """
+    if text is None:
+        return True
+    s = str(text).strip()
+    if not s:
+        return True
+    if len(s) <= 3 and all(ch in "=.-_~*" for ch in s):
+        return True
+    alnum = sum(1 for ch in s if ch.isalnum())
+    if len(s) <= 10 and alnum == 0:
+        return True
+    return False
+
+
 def _env_bool(key: str, default: bool = False) -> bool:
     val = os.getenv(key)
     if val is None:
@@ -494,7 +512,16 @@ def answer_question(
                 logger.error(f"LLM call failed after {max_retries} attempts: {e}")
                 raise
     
-    reply = fix_markdown_tables(reply)  # Fix malformed markdown tables
+    reply = fix_markdown_tables(str(reply))  # Fix malformed markdown tables
+    if _looks_broken_reply(reply):
+        logger.warning("⚠️ Broken/empty LLM reply detected. Replacing with safe fallback.")
+        reply = (
+            "I couldn't generate a usable answer right now.\n\n"
+            "Please try:\n"
+            "1. Rephrase the question in one clear sentence\n"
+            "2. Ask a specific topic (for example: model, error code, or protocol)\n"
+            "3. Try again in a few seconds"
+        )
     
     t_llm_end = time.perf_counter()
     llm_time = t_llm_end - t_llm_start
