@@ -133,6 +133,23 @@ RETRIEVE_LIMIT=50
 RERANK_TOPN=8
 ```
 
+## Railway Deploy (Important)
+
+If the browser shows `API returned HTML instead of JSON`, your frontend is hitting a static page instead of backend API.
+
+This repo now starts a Node web server (`server.js`) that:
+- serves `frontend/dist`
+- proxies `/api/*` to backend
+
+Set this env var in your **frontend Railway service**:
+
+```env
+API_PROXY_TARGET=https://<your-backend-service>.up.railway.app
+```
+
+Then redeploy frontend.  
+Do not point `VITE_API_URL` to the frontend domain itself.
+
 ## License
 
 MIT License
