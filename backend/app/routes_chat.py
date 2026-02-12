@@ -62,13 +62,14 @@ def _answer_direct_llm(llm, message: str, chat_history: list) -> str:
         if content:
             history_lines.append(f"{role}: {content}")
     history_block = "\n".join(history_lines)
+    history_section = f"Conversation history:\n{history_block}\n\n" if history_block else ""
 
     prompt = (
         "You are Panya, an industrial automation assistant.\n"
         "Answer clearly and concisely in English.\n\n"
-        f"{'Conversation history:\n' + history_block + '\n\n' if history_block else ''}"
-        f"User question: {message}\n\n"
-        "Answer:"
+        + history_section
+        + f"User question: {message}\n\n"
+        + "Answer:"
     )
     return str(llm.invoke(prompt)).strip()
 

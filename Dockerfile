@@ -25,8 +25,8 @@ ENV PIP_DEFAULT_TIMEOUT=1000 \
     UVICORN_LOOP=asyncio \
     ANYIO_BACKEND=asyncio \
     BACKEND_HOST=127.0.0.1 \
-    BACKEND_PORT=5000 \
-    API_PROXY_TARGET=http://127.0.0.1:5000
+    BACKEND_PORT=8000 \
+    API_PROXY_TARGET=http://127.0.0.1:8000
 
 COPY backend/requirements.txt /app/backend/requirements.txt
 RUN pip install --retries 5 --timeout 1000 --no-cache-dir -r /app/backend/requirements.txt

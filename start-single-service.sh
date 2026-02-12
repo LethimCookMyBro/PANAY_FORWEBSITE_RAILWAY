@@ -2,12 +2,24 @@
 set -eu
 
 BACKEND_HOST="${BACKEND_HOST:-127.0.0.1}"
-BACKEND_PORT="${BACKEND_PORT:-5000}"
+BACKEND_PORT="${BACKEND_PORT:-8000}"
 FRONTEND_PORT="${PORT:-3000}"
+
+if [ "${BACKEND_PORT}" = "${FRONTEND_PORT}" ]; then
+  echo "[single] invalid config: BACKEND_PORT (${BACKEND_PORT}) must not equal PORT (${FRONTEND_PORT})" >&2
+  exit 1
+fi
 
 if [ -z "${API_PROXY_TARGET:-}" ]; then
   API_PROXY_TARGET="http://${BACKEND_HOST}:${BACKEND_PORT}"
 fi
+
+case "${API_PROXY_TARGET}" in
+  "http://127.0.0.1:${FRONTEND_PORT}"|"http://localhost:${FRONTEND_PORT}"|"http://0.0.0.0:${FRONTEND_PORT}")
+    echo "[single] invalid API_PROXY_TARGET (${API_PROXY_TARGET}): it points to frontend port ${FRONTEND_PORT}. Use backend port ${BACKEND_PORT}." >&2
+    exit 1
+    ;;
+esac
 
 export API_PROXY_TARGET
 export PORT="${FRONTEND_PORT}"

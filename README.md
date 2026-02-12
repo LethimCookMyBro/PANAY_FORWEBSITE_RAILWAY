@@ -141,9 +141,9 @@ If the browser shows `API returned HTML instead of JSON`, your frontend is hitti
 
 This repo now includes a root `Dockerfile` that runs both services in one container:
 
-- FastAPI backend on `127.0.0.1:5000`
+- FastAPI backend on `127.0.0.1:8000`
 - Node web server on `$PORT` (Railway public port), serving `frontend/dist`
-- Runtime proxy `/api/*` -> `http://127.0.0.1:5000`
+- Runtime proxy `/api/*` -> `http://127.0.0.1:8000`
 
 Railway setup:
 
@@ -160,8 +160,9 @@ Required env (same as backend requirements):
 
 Recommended for single-service mode:
 
-- Do not set `API_PROXY_TARGET` (defaults to internal backend `http://127.0.0.1:5000`)
+- Do not set `API_PROXY_TARGET` (defaults to internal backend `http://127.0.0.1:8000`)
 - Do not set `VITE_API_URL`
+- If `API_PROXY_TARGET` is already set to `http://127.0.0.1:$PORT` (for example `5000`), remove it.
 
 If you set `API_PROXY_TARGET`, it must point to backend only. Never set it to your frontend public domain.
 
