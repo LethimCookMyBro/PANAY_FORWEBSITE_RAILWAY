@@ -16,8 +16,8 @@ const distDir = path.join(__dirname, "dist");
 const indexFile = path.join(distDir, "index.html");
 
 app.use(
-  "/api",
   createProxyMiddleware({
+    pathFilter: "/api",
     target: apiTarget,
     changeOrigin: true,
     secure: false,

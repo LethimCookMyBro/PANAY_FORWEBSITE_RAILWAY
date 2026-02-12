@@ -137,18 +137,45 @@ RERANK_TOPN=8
 
 If the browser shows `API returned HTML instead of JSON`, your frontend is hitting a static page instead of backend API.
 
-This repo now starts a Node web server (`server.js`) that:
-- serves `frontend/dist`
-- proxies `/api/*` to backend
+Recommended layout is **2 Railway services**:
 
-Set this env var in your **frontend Railway service**:
+1. `frontend` service
+2. `backend` service
+
+### Frontend service
+
+- Root Directory: `frontend`
+- Build Command: `npm run build`
+- Start Command: `npm start` (runs `server.cjs`)
+
+`server.cjs` serves `dist` and proxies `/api/*` to backend while preserving the full path.
+
+Set:
 
 ```env
 API_PROXY_TARGET=https://<your-backend-service>.up.railway.app
 ```
 
-Then redeploy frontend.  
-Do not point `VITE_API_URL` to the frontend domain itself.
+Do not use `npm run preview` or `serve -s dist` as production start commands.
+Do not set `VITE_API_URL` on the frontend production service.
+
+### Backend service
+
+- Root Directory: `backend`
+- Run with the provided backend Dockerfile / uvicorn startup
+
+Ensure backend is reachable on its Railway domain.
+
+### Verification
+
+```bash
+curl -i https://<frontend-service>.up.railway.app/api/auth/me
+curl -i -X POST https://<frontend-service>.up.railway.app/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+Expected: backend JSON responses (`401`/`422` are acceptable), not HTML and not frontend `404`.
 
 ## License
 

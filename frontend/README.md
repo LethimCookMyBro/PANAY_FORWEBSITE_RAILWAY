@@ -1,20 +1,54 @@
 # Frontend Deploy Notes
 
-## Production start command
+## Railway Frontend Service (Production)
 
-Use:
+Use these settings in the `frontend` service:
 
-```bash
-npm run build
-npm start
-```
+- Root Directory: `frontend`
+- Build Command: `npm run build`
+- Start Command: `npm start`
 
-`npm start` runs `server.cjs`, which serves `dist` and proxies `/api/*` to backend.
+`npm start` runs `server.cjs`, which serves `dist` and proxies `/api/*` at runtime.
 
-## Required env for Railway frontend service
+Do not use these as production start commands:
+
+- `npm run preview`
+- `serve -s dist`
+
+Those modes serve static files only and can break `/api` routing.
+
+## Required Environment Variables
 
 ```env
 API_PROXY_TARGET=https://<your-backend-service>.up.railway.app
 ```
 
-If you see `API returned HTML instead of JSON`, your frontend is not proxying to backend correctly.
+Optional:
+
+```env
+PORT=5173
+```
+
+Important: unset `VITE_API_URL` on the frontend production service. The runtime proxy should handle `/api/*`.
+
+## Proxy Behavior
+
+`server.cjs` uses `http-proxy-middleware` with `pathFilter: "/api"` and forwards the full path unchanged:
+
+- `/api/auth/me` -> `${API_PROXY_TARGET}/api/auth/me`
+- `/api/chat` -> `${API_PROXY_TARGET}/api/chat`
+
+This is required because backend routes are prefixed with `/api`.
+
+## Quick Verification
+
+```bash
+curl -i https://<frontend-service>.up.railway.app/api/auth/me
+curl -i -X POST https://<frontend-service>.up.railway.app/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+Expected: JSON responses from backend (`401`/`422` is fine), not HTML and not frontend `404`.
+
+If you see `API returned HTML instead of JSON`, frontend is still not proxying to backend correctly.
