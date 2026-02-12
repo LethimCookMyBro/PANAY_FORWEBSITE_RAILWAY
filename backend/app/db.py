@@ -5,7 +5,7 @@ from psycopg2 import pool
 _db_pool: pool.SimpleConnectionPool | None = None
 
 
-def init_db_pool() -> pool.SimpleConnectionPool:
+def init_db_pool(database_url: str) -> pool.SimpleConnectionPool:
     """
     Initialize PostgreSQL connection pool (singleton).
     Called once at FastAPI startup.
@@ -13,11 +13,11 @@ def init_db_pool() -> pool.SimpleConnectionPool:
     global _db_pool
 
     if _db_pool is None:
-        database_url = os.getenv("DATABASE_URL")
+        database_url = (database_url or "").strip()
         if not database_url:
             raise RuntimeError(
-                "DATABASE_URL environment variable is required. "
-                "Please set it in your .env file."
+                "Resolved DATABASE_URL is empty. "
+                "Set DATABASE_URL or provide PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE."
             )
 
         minconn = int(os.getenv("DB_POOL_MIN", "1"))

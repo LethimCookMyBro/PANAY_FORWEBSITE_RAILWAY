@@ -152,10 +152,13 @@ Railway setup:
 
 Required env (same as backend requirements):
 
-- `DATABASE_URL`
-- `JWT_SECRET`
+- `APP_ENV=production`
+- `JWT_SECRET=<strong-random-secret>`
 - `OLLAMA_BASE_URL`
 - `OLLAMA_MODEL`
+- database config using one of:
+  - `DATABASE_URL=<postgresql://...>`
+  - or all fallback vars: `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`
 - plus your existing backend env variables
 
 Recommended for single-service mode:
@@ -165,6 +168,13 @@ Recommended for single-service mode:
 - If `API_PROXY_TARGET` is already set to `http://127.0.0.1:$PORT` (for example `5000`), remove it.
 
 If you set `API_PROXY_TARGET`, it must point to backend only. Never set it to your frontend public domain.
+
+Invalid examples (do not use):
+
+```env
+DATABASE_URL=${DATABASE_URL}
+API_PROXY_TARGET=http://127.0.0.1:$PORT
+```
 
 ### Option B: Two Railway services (frontend + backend split)
 

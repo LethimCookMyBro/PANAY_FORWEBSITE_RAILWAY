@@ -56,3 +56,10 @@ Expected: JSON responses from backend (`401`/`422` is fine), not HTML and not fr
 If you see `API returned HTML instead of JSON`, frontend is still not proxying to backend correctly.
 
 If you see `431 Request Header Fields Too Large` on `/api/*`, your proxy target is likely pointing back to the frontend domain (self-loop). Set `API_PROXY_TARGET` to the backend Railway domain.
+
+Invalid examples (do not use):
+
+```env
+DATABASE_URL=${DATABASE_URL}
+API_PROXY_TARGET=http://127.0.0.1:$PORT
+```

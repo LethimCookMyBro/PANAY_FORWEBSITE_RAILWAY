@@ -4,6 +4,47 @@ set -eu
 BACKEND_HOST="${BACKEND_HOST:-127.0.0.1}"
 BACKEND_PORT="${BACKEND_PORT:-8000}"
 FRONTEND_PORT="${PORT:-3000}"
+APP_ENV="$(printf '%s' "${APP_ENV:-development}" | tr '[:upper:]' '[:lower:]')"
+
+is_placeholder() {
+  value="$(printf '%s' "${1:-}" | tr -d '[:space:]')"
+  [ -z "${value}" ] && return 0
+  case "${value}" in
+    '${'*'}'|'${{'*'}}'|'{{'*'}}') return 0 ;;
+  esac
+  return 1
+}
+
+case "${APP_ENV}" in
+  production|development) ;;
+  *)
+    echo "[single] unknown APP_ENV '${APP_ENV}', defaulting to development"
+    APP_ENV="development"
+    ;;
+esac
+export APP_ENV
+
+if [ "${APP_ENV}" = "production" ]; then
+  if is_placeholder "${JWT_SECRET:-}" || [ "${JWT_SECRET:-}" = "dev-secret" ]; then
+    echo "[single] invalid JWT_SECRET for production. Set APP_ENV=production with a real JWT_SECRET." >&2
+    exit 1
+  fi
+fi
+
+if is_placeholder "${DATABASE_URL:-}"; then
+  missing_pg=""
+  for key in PGHOST PGPORT PGUSER PGPASSWORD PGDATABASE; do
+    eval "val=\${$key:-}"
+    if is_placeholder "${val}"; then
+      missing_pg="${missing_pg} ${key}"
+    fi
+  done
+  if [ -n "${missing_pg}" ]; then
+    echo "[single] invalid database env: DATABASE_URL is empty/placeholder and PG fallback vars are missing:${missing_pg}" >&2
+    echo "[single] set DATABASE_URL to a real DSN or provide PGHOST PGPORT PGUSER PGPASSWORD PGDATABASE" >&2
+    exit 1
+  fi
+fi
 
 if [ "${BACKEND_PORT}" = "${FRONTEND_PORT}" ]; then
   echo "[single] invalid config: BACKEND_PORT (${BACKEND_PORT}) must not equal PORT (${FRONTEND_PORT})" >&2
@@ -27,6 +68,7 @@ export PORT="${FRONTEND_PORT}"
 echo "[single] backend -> ${BACKEND_HOST}:${BACKEND_PORT}"
 echo "[single] frontend -> 0.0.0.0:${FRONTEND_PORT}"
 echo "[single] proxy /api -> ${API_PROXY_TARGET}"
+echo "[single] app_env -> ${APP_ENV}"
 
 python -m uvicorn main:app \
   --app-dir /app/backend \

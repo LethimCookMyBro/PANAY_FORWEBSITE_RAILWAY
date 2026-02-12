@@ -53,11 +53,11 @@ from pydantic import BaseModel
 
 from langchain_ollama import OllamaLLM
 from sentence_transformers import SentenceTransformer
-from psycopg2 import pool
 import pytesseract
 from PIL import Image
 
 from app.db import init_db_pool, ensure_schema
+from app.env_resolver import resolve_database_url, redact_database_url, is_placeholder
 from app.routes_auth import router as auth_router
 from app.routes_chat import router as chat_router
 from app.routes_auth import get_current_user
@@ -87,15 +87,8 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 class Config:
     """Centralized configuration management"""
-    
-    # Database - REQUIRED, no fallback to avoid hardcoded credentials
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "")
-    
-    @staticmethod
-    def validate():
-        """Validate required configuration"""
-        if not Config.DATABASE_URL:
-            raise RuntimeError("DATABASE_URL environment variable is required.")
+
+    APP_ENV: str = (os.getenv("APP_ENV", "development") or "development").strip().lower()
     
     OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama3.2")
     OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
@@ -139,10 +132,7 @@ logger.info("=" * 60)
 logger.info("🤖 PLC Assistant v3.0 - Starting up")
 logger.info("=" * 60)
 
-# Validate required configuration
-Config.validate()
-
-logger.info(f"  Database URL: {config.DATABASE_URL[:50]}...")
+logger.info(f"  App Env: {config.APP_ENV}")
 logger.info(f"  Ollama URL: {config.OLLAMA_BASE_URL}")
 logger.info(f"  Ollama Model: {config.OLLAMA_MODEL}")
 logger.info(f"  Embed Model: {config.EMBED_MODEL_NAME}")
@@ -164,6 +154,34 @@ def to_bool(val: Any) -> Optional[bool]:
     if s in ("0", "false", "no", "n", "off"):
         return False
     return None
+
+
+def get_app_env() -> str:
+    env = (os.getenv("APP_ENV", config.APP_ENV or "development") or "development").strip().lower()
+    if env not in {"development", "production"}:
+        logger.warning("Unknown APP_ENV '%s'; defaulting to 'development'", env)
+        return "development"
+    return env
+
+
+def is_weak_jwt_secret(secret: Optional[str]) -> bool:
+    value = (secret or "").strip()
+    return not value or value == "dev-secret" or is_placeholder(value)
+
+
+def validate_runtime_security_config(app_env: str) -> None:
+    jwt_secret = os.getenv("JWT_SECRET", "")
+    if app_env == "production" and is_weak_jwt_secret(jwt_secret):
+        raise RuntimeError(
+            "JWT_SECRET is missing/weak for production. "
+            "Set APP_ENV=production with a real JWT_SECRET (not 'dev-secret' and not placeholder)."
+        )
+
+    if app_env != "production" and is_weak_jwt_secret(jwt_secret):
+        logger.warning(
+            "JWT_SECRET is missing/weak while APP_ENV=%s. This is okay for local development but unsafe for production.",
+            app_env,
+        )
 
 
 def sanitize_json(obj: Any) -> Any:
@@ -333,16 +351,11 @@ def ensure_model(model_name: str) -> bool:
         return False
 
 
-def test_database_connection(db_pool=None) -> bool:
+def test_database_connection(db_pool) -> bool:
     """Test database connectivity and core schema availability."""
     conn = None
     try:
-        if db_pool is not None:
-            conn = db_pool.getconn()
-        else:
-            import psycopg2
-
-            conn = psycopg2.connect(config.DATABASE_URL)
+        conn = db_pool.getconn()
 
         with conn.cursor() as cur:
             cur.execute("SELECT extname FROM pg_extension WHERE extname = 'vector';")
@@ -366,10 +379,7 @@ def test_database_connection(db_pool=None) -> bool:
         return False
     finally:
         if conn is not None:
-            if db_pool is not None:
-                db_pool.putconn(conn)
-            else:
-                conn.close()
+            db_pool.putconn(conn)
 
 
 # ============================================================================
@@ -565,11 +575,31 @@ Provide a helpful, detailed response in English:"""
 async def lifespan(app: FastAPI):
     """Application lifespan manager - handles startup and shutdown"""
     logger.info("🚀 Starting application...")
-    
-    # Initialize database pool
+
+    app_env = get_app_env()
+    app.state.app_env = app_env
+
+    try:
+        validate_runtime_security_config(app_env)
+    except Exception as e:
+        logger.error("🔥 Invalid runtime security config: %s", e)
+        raise RuntimeError("Backend startup aborted due to invalid security configuration") from e
+
+    # Resolve database config
+    try:
+        database_url, database_source = resolve_database_url()
+        app.state.database_url = database_url
+        app.state.database_url_source = database_source
+        logger.info("✅ Database URL resolved via %s", database_source)
+        logger.info("   DB target: %s", redact_database_url(database_url))
+    except Exception as e:
+        logger.error("🔥 Invalid database configuration: %s", e)
+        raise RuntimeError("Backend startup aborted due to invalid database configuration") from e
+
+    # Initialize database pool and schema
     try:
         # init_db_pool() creates and returns SimpleConnectionPool as defined in backend/app/db.py
-        db_pool = init_db_pool()
+        db_pool = init_db_pool(database_url)
         app.state.db_pool = db_pool
         logger.info("✅ Database connection pool created via init_db_pool()")
 
