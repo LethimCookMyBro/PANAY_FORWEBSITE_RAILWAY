@@ -96,12 +96,10 @@ services:
     build: ./frontend
     container_name: plcnext-chatbot-frontend-1
     environment:
-      VITE_API_URL: http://localhost:5000
+      API_PROXY_TARGET: http://backend:5000
+      PORT: 5173
     ports:
       - "5173:5173"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
     restart: unless-stopped
     depends_on:
       backend:

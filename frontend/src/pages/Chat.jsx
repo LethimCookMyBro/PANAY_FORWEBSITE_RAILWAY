@@ -125,6 +125,16 @@ const getResponseSessionId = (payload) => {
   return null;
 };
 
+const removeLastMatchingMessage = (messages, matcher) => {
+  const list = toArray(messages);
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    if (matcher(list[i])) {
+      return [...list.slice(0, i), ...list.slice(i + 1)];
+    }
+  }
+  return list;
+};
+
 const findFallbackSessionId = (payload, userText) => {
   const sessions = pickListPayload(payload, ["items", "sessions"])
     .map((s) => ({
@@ -509,9 +519,27 @@ export default function Chat({ onLogout }) {
       } catch (err) {
         console.error("Chat error:", err);
         setApiError(getApiErrorMessage(err, "Failed to send message"));
+        if (!requestStartsNewChat && activeChatId != null) {
+          setChatHistory((p) =>
+            p.map((c) =>
+              c.id === activeChatId
+                ? {
+                    ...c,
+                    messages: removeLastMatchingMessage(
+                      c.messages,
+                      (m) =>
+                        m?.sender === "user" &&
+                        m?.timestamp === userMsg.timestamp &&
+                        m?.text === userMsg.text,
+                    ),
+                  }
+                : c,
+            ),
+          );
+        }
         setInput((current) => current || userMsg.text);
         if (requestStartsNewChat) {
-          setPendingMessage(userMsg);
+          setPendingMessage(null);
         }
       } finally {
         setIsLoading(false);
