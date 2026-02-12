@@ -46,6 +46,40 @@ const formatTime = (ts) =>
       })
     : "";
 
+const toArray = (value) => (Array.isArray(value) ? value : []);
+
+const normalizeChatId = (value) => {
+  if (value == null || value === "") return null;
+  if (typeof value === "number") return value;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : value;
+};
+
+const pickListPayload = (payload, keys) => {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== "object") return [];
+  for (const key of keys) {
+    if (Array.isArray(payload[key])) return payload[key];
+  }
+  return [];
+};
+
+const getReplyText = (payload) => {
+  const candidates = [
+    payload?.reply,
+    payload?.answer,
+    payload?.message,
+    payload?.response,
+  ];
+  const text = candidates.find(
+    (candidate) => typeof candidate === "string" && candidate.trim(),
+  );
+  return text?.trim() || "I couldn't generate a response right now. Please try again.";
+};
+
+const getResponseSessionId = (payload) =>
+  normalizeChatId(payload?.session_id ?? payload?.sessionId ?? payload?.id);
+
 const fixMarkdownTable = (text) => {
   if (!text?.includes("|")) return text;
   return text
@@ -121,10 +155,9 @@ const mdComponents = {
   ),
   tr: ({ children }) => {
     const cells = [];
-    if (Array.isArray(children))
-      children.forEach((c) => {
-        if (c?.props?.children) cells.push(c.props.children);
-      });
+    toArray(children).forEach((c) => {
+      if (c?.props?.children) cells.push(c.props.children);
+    });
     if (!cells.length) return null;
     return (
       <li className="text-sm">
@@ -149,7 +182,9 @@ export default function Chat({ onLogout }) {
   const [isMobile, setIsMobile] = useState(false);
   const [pinnedChats, setPinnedChats] = useState(() => {
     try {
-      return JSON.parse(localStorage.getItem("pinnedChats") || "[]");
+      return toArray(JSON.parse(localStorage.getItem("pinnedChats") || "[]"))
+        .map((id) => normalizeChatId(id))
+        .filter((id) => id != null);
     } catch {
       return [];
     }
@@ -175,7 +210,8 @@ export default function Chat({ onLogout }) {
 
   /* ---- derived ---- */
   const activeChat = chatHistory.find((c) => c.id === activeChatId);
-  const hasMessages = activeChat?.messages?.length > 0 || !!pendingMessage;
+  const activeMessages = useMemo(() => toArray(activeChat?.messages), [activeChat]);
+  const hasMessages = activeMessages.length > 0 || !!pendingMessage;
 
   const sortedChats = useMemo(
     () =>
@@ -222,17 +258,22 @@ export default function Chat({ onLogout }) {
       .get("/api/chat/sessions")
       .then((r) => {
         setApiError("");
-        const sessions = r.data.items.map((s) => ({
-          id: s.id,
-          title: s.title,
-          messages: [],
-          created_at: s.created_at,
-          updated_at: s.updated_at || s.created_at,
-        }));
+        const sessions = pickListPayload(r.data, ["items", "sessions"])
+          .map((s) => ({
+            id: normalizeChatId(s?.id),
+            title: s?.title,
+            messages: [],
+            created_at: s?.created_at,
+            updated_at: s?.updated_at || s?.created_at,
+          }))
+          .filter((s) => s.id != null);
         setChatHistory(sessions);
         if (sessions.length > 0) {
           setActiveChatId(sessions[0].id);
           setIsNewChat(false);
+        } else {
+          setActiveChatId(null);
+          setIsNewChat(true);
         }
       })
       .catch((err) => {
@@ -242,19 +283,19 @@ export default function Chat({ onLogout }) {
   }, []);
 
   useEffect(() => {
-    if (!activeChatId) return;
+    if (activeChatId == null) return;
     const chat = chatHistory.find((c) => c.id === activeChatId);
-    if (chat?.messages?.length > 0) return;
+    if (toArray(chat?.messages).length > 0) return;
     api
       .get(`/api/chat/sessions/${activeChatId}`)
       .then((r) => {
         setApiError("");
-        const msgs = r.data.items.map((m) => ({
-          text: m.content,
-          sender: m.role === "user" ? "user" : "bot",
-          timestamp: m.created_at,
-          processingTime: m.metadata?.processing_time,
-          ragas: m.metadata?.ragas,
+        const msgs = pickListPayload(r.data, ["items", "messages"]).map((m) => ({
+          text: m?.content || "",
+          sender: m?.role === "user" ? "user" : "bot",
+          timestamp: m?.created_at,
+          processingTime: m?.metadata?.processing_time,
+          ragas: m?.metadata?.ragas,
         }));
         setChatHistory((p) =>
           p.map((c) => (c.id === activeChatId ? { ...c, messages: msgs } : c)),
@@ -296,22 +337,24 @@ export default function Chat({ onLogout }) {
   const handleSend = useCallback(
     async (e) => {
       e?.preventDefault?.();
-      if (!input.trim() || isLoading) return;
+      const trimmedInput = input.trim();
+      if (!trimmedInput || isLoading) return;
 
       const userMsg = {
-        text: input,
+        text: trimmedInput,
         sender: "user",
         timestamp: new Date().toISOString(),
       };
+      const requestStartsNewChat = activeChatId == null || isNewChat;
       setApiError("");
       setInput("");
       setIsLoading(true);
 
-      if (activeChatId) {
+      if (activeChatId != null) {
         setChatHistory((p) =>
           p.map((c) =>
             c.id === activeChatId
-              ? { ...c, messages: [...c.messages, userMsg] }
+              ? { ...c, messages: [...toArray(c.messages), userMsg] }
               : c,
           ),
         );
@@ -322,11 +365,18 @@ export default function Chat({ onLogout }) {
       try {
         const res = await api.post("/api/chat", {
           message: userMsg.text,
-          session_id: isNewChat ? null : activeChatId,
+          session_id: requestStartsNewChat ? null : activeChatId,
         });
-        const sid = res.data.session_id;
+        const payload = res?.data || {};
+        const sid =
+          getResponseSessionId(payload) ??
+          (requestStartsNewChat ? null : normalizeChatId(activeChatId));
+        if (sid == null) {
+          throw new Error("Chat response is missing session_id");
+        }
+        const replyText = getReplyText(payload);
 
-        if (isNewChat) {
+        if (requestStartsNewChat) {
           const newSession = {
             id: sid,
             title: userMsg.text.slice(0, 50),
@@ -341,11 +391,11 @@ export default function Chat({ onLogout }) {
         }
 
         const botMsg = {
-          text: res.data.reply,
+          text: replyText,
           sender: "bot",
           timestamp: new Date().toISOString(),
-          processingTime: res.data.processing_time,
-          ragas: res.data.ragas,
+          processingTime: payload.processing_time,
+          ragas: payload.ragas,
         };
 
         setChatHistory((p) =>
@@ -353,7 +403,7 @@ export default function Chat({ onLogout }) {
             c.id === sid
               ? {
                   ...c,
-                  messages: [...c.messages, botMsg],
+                  messages: [...toArray(c.messages), botMsg],
                   updated_at: new Date().toISOString(),
                 }
               : c,
@@ -362,7 +412,10 @@ export default function Chat({ onLogout }) {
       } catch (err) {
         console.error("Chat error:", err);
         setApiError(getApiErrorMessage(err, "Failed to send message"));
-        setPendingMessage(null);
+        setInput((current) => current || userMsg.text);
+        if (requestStartsNewChat) {
+          setPendingMessage(userMsg);
+        }
       } finally {
         setIsLoading(false);
         setTimeout(
@@ -386,8 +439,12 @@ export default function Chat({ onLogout }) {
 
   const togglePin = (e, id) => {
     e.stopPropagation();
+    const normalizedId = normalizeChatId(id);
+    if (normalizedId == null) return;
     setPinnedChats((p) => {
-      const next = p.includes(id) ? p.filter((x) => x !== id) : [...p, id];
+      const next = p.includes(normalizedId)
+        ? p.filter((x) => x !== normalizedId)
+        : [...p, normalizedId];
       localStorage.setItem("pinnedChats", JSON.stringify(next));
       return next;
     });
@@ -395,10 +452,12 @@ export default function Chat({ onLogout }) {
 
   const handleDelete = async (e, id) => {
     e.stopPropagation();
+    const normalizedId = normalizeChatId(id);
+    if (normalizedId == null) return;
     try {
-      await api.delete(`/api/chat/sessions/${id}`);
-      setChatHistory((p) => p.filter((c) => c.id !== id));
-      if (activeChatId === id) handleNewChat();
+      await api.delete(`/api/chat/sessions/${normalizedId}`);
+      setChatHistory((p) => p.filter((c) => c.id !== normalizedId));
+      if (activeChatId === normalizedId) handleNewChat();
     } catch (err) {
       console.error("Delete failed", err);
       setApiError(getApiErrorMessage(err, "Failed to delete chat"));
@@ -768,11 +827,15 @@ export default function Chat({ onLogout }) {
           <>
             <div className="flex-1 overflow-y-auto p-4 sm:p-6 scroll-smooth">
               <div className="max-w-3xl mx-auto flex flex-col gap-5 pb-4">
-                {activeChat?.messages.map((m, i) => (
-                  <div
-                    key={i}
-                    className={`flex ${m.sender === "user" ? "justify-end" : "items-start gap-3"} fade-in-up`}
-                  >
+                {activeMessages.map((m, i) => {
+                  const processingTime = Number(m?.processingTime);
+                  const hasProcessingTime =
+                    Number.isFinite(processingTime) && processingTime > 0;
+                  return (
+                    <div
+                      key={i}
+                      className={`flex ${m.sender === "user" ? "justify-end" : "items-start gap-3"} fade-in-up`}
+                    >
                     {/* Bot avatar */}
                     {m.sender === "bot" && (
                       <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-400 flex items-center justify-center flex-shrink-0 mt-1 shadow-sm">
@@ -801,9 +864,9 @@ export default function Chat({ onLogout }) {
                       </div>
 
                       {/* Metrics */}
-                      {m.sender === "bot" && m.processingTime && (
+                      {m.sender === "bot" && hasProcessingTime && (
                         <div className="flex items-center gap-2 mt-1.5 text-[10px] text-slate-400">
-                          <span>⏱ {m.processingTime.toFixed(2)}s</span>
+                          <span>⏱ {processingTime.toFixed(2)}s</span>
                           {m.ragas?.scores?.faithfulness != null && (
                             <span>
                               • Faithfulness:{" "}
@@ -844,7 +907,8 @@ export default function Chat({ onLogout }) {
                       </div>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
 
                 {/* Pending message */}
                 {pendingMessage && !activeChat && (

@@ -2,7 +2,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from app.chatbot import answer_question
 from app.routes_auth import get_current_user
@@ -42,6 +42,16 @@ def _build_service_error_reply() -> str:
         "I hit a backend error while generating the answer.\n\n"
         "Please try again in a few seconds. If it keeps happening, check backend logs."
     )
+
+
+def _coerce_answer_result(result: Any) -> Dict[str, Any]:
+    if isinstance(result, dict):
+        return result
+    if isinstance(result, str):
+        return {"reply": result}
+    if result is None:
+        return {}
+    return {"reply": str(result)}
 
 
 def _answer_direct_llm(llm, message: str, chat_history: list) -> str:
@@ -115,7 +125,9 @@ def chat(
         result = get_chat_messages(db_pool, session_id, current_user["id"])
         if result is None:
             raise HTTPException(status_code=404, detail="Chat session not found")
-        messages = result.get("items", []) if result else []
+        messages = result.get("items", []) if isinstance(result, dict) else []
+        if not isinstance(messages, list):
+            messages = []
         chat_history = [{"role": m["role"], "content": m["content"]} for m in messages[-10:]]
 
     # 2) Save USER message
@@ -172,21 +184,32 @@ def chat(
                 "metadata": {"error": "generation_failed", "detail": str(e)},
             }
 
-    if "reply" not in result or not str(result.get("reply", "")).strip():
+    result = _coerce_answer_result(result)
+    if not str(result.get("reply", "")).strip():
         result["reply"] = _build_service_error_reply()
 
     # 4) Save ASSISTANT message with metrics
-    insert_chat_message(
-        db_pool=db_pool,
-        session_id=session_id,
-        role="assistant",
-        content=result["reply"],
-        metadata={
-            "processing_time": result.get("processing_time", 0.0),
-            "ragas": result.get("ragas"),
-            "error": (result.get("metadata") or {}).get("error"),
-        },
-    )
+    assistant_saved = True
+    try:
+        insert_chat_message(
+            db_pool=db_pool,
+            session_id=session_id,
+            role="assistant",
+            content=result["reply"],
+            metadata={
+                "processing_time": result.get("processing_time", 0.0),
+                "ragas": result.get("ragas"),
+                "error": (result.get("metadata") or {}).get("error"),
+            },
+        )
+    except Exception as e:
+        assistant_saved = False
+        logger.error(
+            "Failed to persist assistant message for session %s: %s",
+            session_id,
+            e,
+            exc_info=True,
+        )
 
     return {
         "session_id": session_id,
@@ -198,6 +221,7 @@ def chat(
             "context_count": result.get("context_count", 0),
             "max_score": result.get("max_score"),
             "error": (result.get("metadata") or {}).get("error"),
+            "storage_warning": None if assistant_saved else "assistant_message_not_saved",
         },
     }
 
