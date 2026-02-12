@@ -8,10 +8,26 @@ import axios from "axios";
 const API_URL = import.meta.env.VITE_API_URL || "";
 const API_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS || 180000);
 
+const looksLikeHtml = (value) => {
+  if (typeof value !== "string") return false;
+  const sample = value.trim().slice(0, 200).toLowerCase();
+  return (
+    sample.startsWith("<!doctype html") ||
+    sample.startsWith("<html") ||
+    sample.includes("<head") ||
+    sample.includes("<body")
+  );
+};
+
+const isApiUrl = (url = "") => /^\/?api(\/|$)/.test(url) || url.includes("/api/");
+
 export const getApiErrorMessage = (error, fallback = "Request failed") => {
   const data = error?.response?.data;
 
   if (typeof data === "string" && data.trim()) {
+    if (looksLikeHtml(data)) {
+      return "API returned HTML instead of JSON. Check VITE_API_URL or /api proxy routing.";
+    }
     return data;
   }
 
@@ -76,7 +92,19 @@ api.interceptors.request.use(
 
 // Response interceptor - handle auth errors
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    const url = response?.config?.url || "";
+    if (isApiUrl(url) && looksLikeHtml(response?.data)) {
+      const formatError = new Error(
+        "API returned HTML instead of JSON. Check VITE_API_URL or /api proxy routing.",
+      );
+      formatError.response = response;
+      formatError.config = response?.config;
+      formatError.code = "API_INVALID_HTML_RESPONSE";
+      return Promise.reject(formatError);
+    }
+    return response;
+  },
   async (error) => {
     const originalRequest = error.config || {};
     const url = originalRequest.url || "";

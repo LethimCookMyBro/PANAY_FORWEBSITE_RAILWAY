@@ -64,12 +64,28 @@ const pickListPayload = (payload, keys) => {
   return [];
 };
 
+const unwrapResponsePayload = (payload) => {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return {};
+  const nested = payload.data;
+  if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+    return nested;
+  }
+  return payload;
+};
+
 const getReplyText = (payload) => {
+  const normalizedPayload = unwrapResponsePayload(payload);
   const candidates = [
+    normalizedPayload?.reply,
+    normalizedPayload?.answer,
+    normalizedPayload?.message,
+    normalizedPayload?.response,
+    normalizedPayload?.content,
     payload?.reply,
     payload?.answer,
     payload?.message,
     payload?.response,
+    payload?.content,
   ];
   const text = candidates.find(
     (candidate) => typeof candidate === "string" && candidate.trim(),
@@ -77,8 +93,62 @@ const getReplyText = (payload) => {
   return text?.trim() || "I couldn't generate a response right now. Please try again.";
 };
 
-const getResponseSessionId = (payload) =>
-  normalizeChatId(payload?.session_id ?? payload?.sessionId ?? payload?.id);
+const getResponseSessionId = (payload) => {
+  const normalizedPayload = unwrapResponsePayload(payload);
+  const candidates = [
+    normalizedPayload?.session_id,
+    normalizedPayload?.sessionId,
+    normalizedPayload?.id,
+    normalizedPayload?.chat_id,
+    normalizedPayload?.chatId,
+    normalizedPayload?.session?.id,
+    normalizedPayload?.session?.session_id,
+    normalizedPayload?.chat?.id,
+    normalizedPayload?.chat?.session_id,
+    normalizedPayload?.meta?.session_id,
+    payload?.session_id,
+    payload?.sessionId,
+    payload?.id,
+    payload?.chat_id,
+    payload?.chatId,
+    payload?.session?.id,
+    payload?.session?.session_id,
+    payload?.chat?.id,
+    payload?.chat?.session_id,
+    payload?.meta?.session_id,
+  ];
+
+  for (const candidate of candidates) {
+    const id = normalizeChatId(candidate);
+    if (id != null) return id;
+  }
+  return null;
+};
+
+const findFallbackSessionId = (payload, userText) => {
+  const sessions = pickListPayload(payload, ["items", "sessions"])
+    .map((s) => ({
+      id: normalizeChatId(s?.id ?? s?.session_id ?? s?.sessionId),
+      title: typeof s?.title === "string" ? s.title : "",
+      updated_at: s?.updated_at || s?.created_at,
+    }))
+    .filter((s) => s.id != null);
+  if (!sessions.length) return null;
+
+  const targetTitle = userText.slice(0, 50).trim().toLowerCase();
+  const now = Date.now();
+  const freshSessions = sessions.filter((s) => {
+    const timestamp = Date.parse(s.updated_at || "");
+    if (Number.isNaN(timestamp)) return false;
+    return Math.abs(now - timestamp) <= 5 * 60 * 1000;
+  });
+  const titleMatched = freshSessions.find(
+    (s) => s.title.trim().toLowerCase() === targetTitle,
+  );
+  if (titleMatched) return titleMatched.id;
+
+  return freshSessions[0]?.id ?? sessions[0]?.id ?? null;
+};
 
 const fixMarkdownTable = (text) => {
   if (!text?.includes("|")) return text;
@@ -368,23 +438,49 @@ export default function Chat({ onLogout }) {
           session_id: requestStartsNewChat ? null : activeChatId,
         });
         const payload = res?.data || {};
-        const sid =
+        let sid =
           getResponseSessionId(payload) ??
           (requestStartsNewChat ? null : normalizeChatId(activeChatId));
+        if (sid == null && requestStartsNewChat) {
+          try {
+            const sessionsRes = await api.get("/api/chat/sessions");
+            sid = findFallbackSessionId(sessionsRes?.data, userMsg.text);
+          } catch (lookupErr) {
+            console.warn("Session fallback lookup failed:", lookupErr);
+          }
+        }
         if (sid == null) {
-          throw new Error("Chat response is missing session_id");
+          throw new Error(
+            "Chat response is missing session_id (check API response format/config)",
+          );
         }
         const replyText = getReplyText(payload);
+        const normalizedPayload = unwrapResponsePayload(payload);
+        const nowIso = new Date().toISOString();
 
         if (requestStartsNewChat) {
-          const newSession = {
-            id: sid,
-            title: userMsg.text.slice(0, 50),
-            messages: [userMsg],
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          };
-          setChatHistory((p) => [newSession, ...p]);
+          setChatHistory((p) => {
+            if (p.some((c) => c.id === sid)) {
+              return p.map((c) =>
+                c.id === sid
+                  ? {
+                      ...c,
+                      title: c.title || userMsg.text.slice(0, 50),
+                      messages: [...toArray(c.messages), userMsg],
+                      updated_at: nowIso,
+                    }
+                  : c,
+              );
+            }
+            const newSession = {
+              id: sid,
+              title: userMsg.text.slice(0, 50),
+              messages: [userMsg],
+              created_at: nowIso,
+              updated_at: nowIso,
+            };
+            return [newSession, ...p];
+          });
           setActiveChatId(sid);
           setIsNewChat(false);
           setPendingMessage(null);
@@ -394,8 +490,9 @@ export default function Chat({ onLogout }) {
           text: replyText,
           sender: "bot",
           timestamp: new Date().toISOString(),
-          processingTime: payload.processing_time,
-          ragas: payload.ragas,
+          processingTime:
+            normalizedPayload.processing_time ?? payload.processing_time,
+          ragas: normalizedPayload.ragas ?? payload.ragas,
         };
 
         setChatHistory((p) =>

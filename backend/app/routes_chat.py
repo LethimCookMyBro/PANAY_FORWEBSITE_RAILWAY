@@ -213,6 +213,8 @@ def chat(
 
     return {
         "session_id": session_id,
+        "sessionId": session_id,
+        "id": session_id,
         "reply": result["reply"],
         "processing_time": result.get("processing_time", 0.0),
         "ragas": result.get("ragas"),
