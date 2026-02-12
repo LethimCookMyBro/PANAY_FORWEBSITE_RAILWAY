@@ -1,5 +1,7 @@
 # Frontend Deploy Notes
 
+If you want a single Railway service for both frontend and backend, use the root `Dockerfile` in repo root (`Panya/`) instead of this `frontend/` service setup.
+
 ## Railway Frontend Service (Production)
 
 Use these settings in the `frontend` service:

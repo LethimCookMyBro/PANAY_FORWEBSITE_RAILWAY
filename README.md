@@ -137,6 +137,36 @@ RERANK_TOPN=8
 
 If the browser shows `API returned HTML instead of JSON`, your frontend is hitting a static page instead of backend API.
 
+### Option A: Single Railway service (frontend + backend together)
+
+This repo now includes a root `Dockerfile` that runs both services in one container:
+
+- FastAPI backend on `127.0.0.1:5000`
+- Node web server on `$PORT` (Railway public port), serving `frontend/dist`
+- Runtime proxy `/api/*` -> `http://127.0.0.1:5000`
+
+Railway setup:
+
+- Service Root Directory: repo root (`Panya/`)
+- Deploy with Docker (uses root `Dockerfile`)
+
+Required env (same as backend requirements):
+
+- `DATABASE_URL`
+- `JWT_SECRET`
+- `OLLAMA_BASE_URL`
+- `OLLAMA_MODEL`
+- plus your existing backend env variables
+
+Recommended for single-service mode:
+
+- Do not set `API_PROXY_TARGET` (defaults to internal backend `http://127.0.0.1:5000`)
+- Do not set `VITE_API_URL`
+
+If you set `API_PROXY_TARGET`, it must point to backend only. Never set it to your frontend public domain.
+
+### Option B: Two Railway services (frontend + backend split)
+
 Recommended layout is **2 Railway services**:
 
 1. `frontend` service
