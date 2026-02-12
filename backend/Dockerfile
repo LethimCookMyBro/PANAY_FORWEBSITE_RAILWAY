@@ -13,8 +13,8 @@ ENV PIP_DEFAULT_TIMEOUT=1000 \
     ANYIO_BACKEND=asyncio
 
 COPY requirements.txt ./
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --retries 5 --timeout 1000 --no-cache-dir -r requirements.txt
+# Fixed: Removed --mount=type=cache which causes issues on some Railway builders
+RUN pip install --retries 5 --timeout 1000 --no-cache-dir -r requirements.txt
 
 COPY . .
 
