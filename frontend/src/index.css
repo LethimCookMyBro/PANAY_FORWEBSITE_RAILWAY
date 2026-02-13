@@ -33,6 +33,11 @@ body {
   font-family: "Manrope", "Noto Sans Thai", "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  height: 100%;
+  overflow: hidden;
+}
+html {
+  height: 100%;
 }
 
 h1,
@@ -152,7 +157,11 @@ h3 {
 
 .liquid-shell {
   background:
-    radial-gradient(1400px 800px at 0% 0%, var(--liquid-bg-3) 0%, transparent 60%),
+    radial-gradient(
+      1400px 800px at 0% 0%,
+      var(--liquid-bg-3) 0%,
+      transparent 60%
+    ),
     radial-gradient(1200px 900px at 100% 100%, #dbe5ff 0%, transparent 62%),
     linear-gradient(135deg, var(--liquid-bg-1) 0%, var(--liquid-bg-2) 100%);
 }

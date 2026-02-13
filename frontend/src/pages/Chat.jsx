@@ -65,7 +65,8 @@ const pickListPayload = (payload, keys) => {
 };
 
 const unwrapResponsePayload = (payload) => {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return {};
+  if (!payload || typeof payload !== "object" || Array.isArray(payload))
+    return {};
   const nested = payload.data;
   if (nested && typeof nested === "object" && !Array.isArray(nested)) {
     return nested;
@@ -90,7 +91,10 @@ const getReplyText = (payload) => {
   const text = candidates.find(
     (candidate) => typeof candidate === "string" && candidate.trim(),
   );
-  return text?.trim() || "I couldn't generate a response right now. Please try again.";
+  return (
+    text?.trim() ||
+    "I couldn't generate a response right now. Please try again."
+  );
 };
 
 const getResponseSessionId = (payload) => {
@@ -290,7 +294,10 @@ export default function Chat({ onLogout }) {
 
   /* ---- derived ---- */
   const activeChat = chatHistory.find((c) => c.id === activeChatId);
-  const activeMessages = useMemo(() => toArray(activeChat?.messages), [activeChat]);
+  const activeMessages = useMemo(
+    () => toArray(activeChat?.messages),
+    [activeChat],
+  );
   const hasMessages = activeMessages.length > 0 || !!pendingMessage;
 
   const sortedChats = useMemo(
@@ -370,13 +377,15 @@ export default function Chat({ onLogout }) {
       .get(`/api/chat/sessions/${activeChatId}`)
       .then((r) => {
         setApiError("");
-        const msgs = pickListPayload(r.data, ["items", "messages"]).map((m) => ({
-          text: m?.content || "",
-          sender: m?.role === "user" ? "user" : "bot",
-          timestamp: m?.created_at,
-          processingTime: m?.metadata?.processing_time,
-          ragas: m?.metadata?.ragas,
-        }));
+        const msgs = pickListPayload(r.data, ["items", "messages"]).map(
+          (m) => ({
+            text: m?.content || "",
+            sender: m?.role === "user" ? "user" : "bot",
+            timestamp: m?.created_at,
+            processingTime: m?.metadata?.processing_time,
+            ragas: m?.metadata?.ragas,
+          }),
+        );
         setChatHistory((p) =>
           p.map((c) => (c.id === activeChatId ? { ...c, messages: msgs } : c)),
         );
@@ -619,7 +628,7 @@ export default function Chat({ onLogout }) {
                 ? "Transcribing..."
                 : "Ask about PLC, automation, troubleshooting..."
           }
-          className="composer-textarea w-full bg-transparent focus:outline-none text-slate-800 placeholder-slate-400 px-2 py-1.5 resize-none"
+          className="composer-textarea w-full bg-transparent focus:outline-none text-slate-800 placeholder-slate-400 px-2 py-1.5 resize-none text-base"
           disabled={isLoading || isRecording || isTranscribing}
         />
         <div className="flex items-center justify-end gap-1 pr-1">
@@ -651,13 +660,18 @@ export default function Chat({ onLogout }) {
           </button>
           <button
             type="submit"
-            disabled={isLoading || !input.trim() || isRecording || isTranscribing}
+            disabled={
+              isLoading || !input.trim() || isRecording || isTranscribing
+            }
             className="bg-gradient-to-r from-blue-500 to-cyan-500 text-white p-2 rounded-full hover:from-blue-600 hover:to-cyan-600 disabled:opacity-30 disabled:cursor-not-allowed transition-all shadow-md shadow-blue-500/20 flex-shrink-0"
           >
             {isLoading ? (
               <LoaderCircle size={18} className="animate-spin" />
             ) : (
-              <Send size={18} className={input.trim() ? "translate-x-0.5" : ""} />
+              <Send
+                size={18}
+                className={input.trim() ? "translate-x-0.5" : ""}
+              />
             )}
           </button>
         </div>
@@ -667,7 +681,7 @@ export default function Chat({ onLogout }) {
 
   /* ================= RENDER ================= */
   return (
-    <div className="liquid-shell flex h-screen font-sans relative overflow-hidden">
+    <div className="liquid-shell flex h-[100dvh] font-sans relative overflow-hidden">
       <div className="liquid-orb liquid-orb-a" />
       <div className="liquid-orb liquid-orb-b" />
       <div className="liquid-orb liquid-orb-c" />
@@ -863,7 +877,7 @@ export default function Chat({ onLogout }) {
       </aside>
 
       {/* ===== MAIN AREA ===== */}
-      <div className="flex-1 flex flex-col h-screen relative z-10">
+      <div className="flex-1 flex flex-col h-full relative z-10">
         {/* Header */}
         <header className="h-12 glass border-b border-slate-200/40 flex items-center justify-between px-5 shrink-0 z-10">
           <div className="flex items-center gap-3">
@@ -961,77 +975,78 @@ export default function Chat({ onLogout }) {
                       key={i}
                       className={`flex ${m.sender === "user" ? "justify-end" : "items-start gap-3"} fade-in-up`}
                     >
-                    {/* Bot avatar */}
-                    {m.sender === "bot" && (
-                      <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-400 flex items-center justify-center flex-shrink-0 mt-1 shadow-sm">
-                        <Bot size={14} className="text-white" />
-                      </div>
-                    )}
-                    <div
-                      className={`flex flex-col ${m.sender === "user" ? "items-end" : "items-start flex-1 min-w-0"}`}
-                    >
+                      {/* Bot avatar */}
+                      {m.sender === "bot" && (
+                        <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-400 flex items-center justify-center flex-shrink-0 mt-1 shadow-sm">
+                          <Bot size={14} className="text-white" />
+                        </div>
+                      )}
                       <div
-                        className={`max-w-[85%] px-4 py-3 rounded-2xl text-[14px] leading-relaxed break-words overflow-hidden
+                        className={`flex flex-col ${m.sender === "user" ? "items-end" : "items-start flex-1 min-w-0"}`}
+                      >
+                        <div
+                          className={`max-w-[85%] px-4 py-3 rounded-2xl text-[14px] leading-relaxed break-words overflow-hidden
                           ${
                             m.sender === "user"
                               ? "bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-br-md shadow-md shadow-blue-500/15"
                               : "bg-white text-slate-700 border border-slate-100 rounded-bl-md shadow-sm prose prose-sm max-w-none"
                           }`}
-                        style={{ overflowWrap: "anywhere" }}
-                      >
-                        {m.sender === "bot" ? (
-                          <ReactMarkdown components={mdComponents}>
-                            {fixMarkdownTable(m.text)}
-                          </ReactMarkdown>
-                        ) : (
-                          m.text
-                        )}
-                      </div>
-
-                      {/* Metrics */}
-                      {m.sender === "bot" && hasProcessingTime && (
-                        <div className="flex items-center gap-2 mt-1.5 text-[10px] text-slate-400">
-                          <span>⏱ {processingTime.toFixed(2)}s</span>
-                          {m.ragas?.scores?.faithfulness != null && (
-                            <span>
-                              • Faithfulness:{" "}
-                              {(m.ragas.scores.faithfulness * 100).toFixed(0)}%
-                            </span>
+                          style={{ overflowWrap: "anywhere" }}
+                        >
+                          {m.sender === "bot" ? (
+                            <ReactMarkdown components={mdComponents}>
+                              {fixMarkdownTable(m.text)}
+                            </ReactMarkdown>
+                          ) : (
+                            m.text
                           )}
                         </div>
-                      )}
 
-                      {/* Actions */}
-                      <div
-                        className={`flex items-center gap-1 mt-1 ${m.sender === "user" ? "flex-row-reverse" : ""}`}
-                      >
-                        {m.timestamp && (
-                          <span className="text-[10px] text-slate-300 px-1">
-                            {formatTime(m.timestamp)}
-                          </span>
+                        {/* Metrics */}
+                        {m.sender === "bot" && hasProcessingTime && (
+                          <div className="flex items-center gap-2 mt-1.5 text-[10px] text-slate-400">
+                            <span>⏱ {processingTime.toFixed(2)}s</span>
+                            {m.ragas?.scores?.faithfulness != null && (
+                              <span>
+                                • Faithfulness:{" "}
+                                {(m.ragas.scores.faithfulness * 100).toFixed(0)}
+                                %
+                              </span>
+                            )}
+                          </div>
                         )}
-                        <button
-                          onClick={() => copyMsg(m.text, i)}
-                          className="p-1 rounded hover:bg-slate-100 text-slate-300 hover:text-slate-500 transition-all"
+
+                        {/* Actions */}
+                        <div
+                          className={`flex items-center gap-1 mt-1 ${m.sender === "user" ? "flex-row-reverse" : ""}`}
                         >
-                          {copiedId === i ? (
-                            <Check size={12} className="text-green-500" />
-                          ) : (
-                            <Copy size={12} />
+                          {m.timestamp && (
+                            <span className="text-[10px] text-slate-300 px-1">
+                              {formatTime(m.timestamp)}
+                            </span>
                           )}
-                        </button>
-                        <button
-                          onClick={() => {
-                            setInput(m.text);
-                            inputRef.current?.focus();
-                          }}
-                          className="p-1 rounded hover:bg-blue-50 text-slate-300 hover:text-blue-500 transition-all"
-                        >
-                          <CornerDownLeft size={12} />
-                        </button>
+                          <button
+                            onClick={() => copyMsg(m.text, i)}
+                            className="p-1 rounded hover:bg-slate-100 text-slate-300 hover:text-slate-500 transition-all"
+                          >
+                            {copiedId === i ? (
+                              <Check size={12} className="text-green-500" />
+                            ) : (
+                              <Copy size={12} />
+                            )}
+                          </button>
+                          <button
+                            onClick={() => {
+                              setInput(m.text);
+                              inputRef.current?.focus();
+                            }}
+                            className="p-1 rounded hover:bg-blue-50 text-slate-300 hover:text-blue-500 transition-all"
+                          >
+                            <CornerDownLeft size={12} />
+                          </button>
+                        </div>
                       </div>
                     </div>
-                  </div>
                   );
                 })}
 

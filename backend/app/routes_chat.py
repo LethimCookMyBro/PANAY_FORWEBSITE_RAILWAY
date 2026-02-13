@@ -1,4 +1,5 @@
 import logging
+import requests
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -37,10 +38,23 @@ def _build_llm_unavailable_reply() -> str:
     )
 
 
-def _build_service_error_reply() -> str:
+def _build_service_error_reply(detail: str = "") -> str:
+    msg = "I hit a backend error while generating the answer."
+    if detail:
+        msg += f"\n\nError details: {detail}"
+    msg += "\n\nPlease try again in a few seconds. If it keeps happening, check backend logs."
+    return msg
+
+def _build_connection_error_reply() -> str:
     return (
-        "I hit a backend error while generating the answer.\n\n"
-        "Please try again in a few seconds. If it keeps happening, check backend logs."
+        "I cannot connect to the AI service (Ollama).\n\n"
+        "Please check if the Ollama service is running and accessible at the configured URL."
+    )
+
+def _build_timeout_error_reply() -> str:
+    return (
+        "The AI service timed out while generating the answer.\n\n"
+        "The model might be loading or the query is too complex. Please try again."
     )
 
 
@@ -173,10 +187,32 @@ def chat(
                     "context_count": 0,
                     "max_score": None,
                 }
+        except requests.exceptions.ConnectionError:
+            logger.error("Chat generation failed: Connection refused to AI service")
+            result = {
+                "reply": _build_connection_error_reply(),
+                "processing_time": 0.0,
+                "ragas": None,
+                "retrieval_time": 0.0,
+                "context_count": 0,
+                "max_score": None,
+                "metadata": {"error": "connection_error"},
+            }
+        except requests.exceptions.Timeout:
+            logger.error("Chat generation failed: AI service timed out")
+            result = {
+                "reply": _build_timeout_error_reply(),
+                "processing_time": 0.0,
+                "ragas": None,
+                "retrieval_time": 0.0,
+                "context_count": 0,
+                "max_score": None,
+                "metadata": {"error": "timeout"},
+            }
         except Exception as e:
             logger.error("Chat generation failed: %s", e, exc_info=True)
             result = {
-                "reply": _build_service_error_reply(),
+                "reply": _build_service_error_reply(str(e)),
                 "processing_time": 0.0,
                 "ragas": None,
                 "retrieval_time": 0.0,
@@ -187,7 +223,7 @@ def chat(
 
     result = _coerce_answer_result(result)
     if not str(result.get("reply", "")).strip():
-        result["reply"] = _build_service_error_reply()
+        result["reply"] = _build_service_error_reply("")
 
     # 4) Save ASSISTANT message with metrics
     assistant_saved = True
