@@ -14,8 +14,9 @@ venv/
 models/
 
 # Data files (PDFs, documents for embedding)
-data/
-*.sql
+data/*
+!data/Knowledge/
+!data/Knowledge/**
 
 # Docker
 *.log
