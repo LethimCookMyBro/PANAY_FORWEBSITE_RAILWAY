@@ -25,9 +25,9 @@ export default function Register({ onRegisterSuccess, onBackToLogin }) {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden">
+    <div className="min-h-screen auth-shell flex items-center justify-center p-4 relative overflow-hidden">
       {/* Animated gradient background */}
-      <div className="fixed inset-0 bg-gradient-to-br from-slate-900 via-blue-950 to-slate-900 animated-gradient" />
+      <div className="fixed inset-0 animated-gradient" />
 
       {/* Decorative orbs */}
       <div className="fixed top-1/3 right-1/4 w-96 h-96 bg-cyan-500/20 rounded-full blur-3xl" />
@@ -55,7 +55,7 @@ export default function Register({ onRegisterSuccess, onBackToLogin }) {
         {/* Card */}
         <form
           onSubmit={handleSubmit}
-          className="glass-dark rounded-2xl p-6 sm:p-8 shadow-2xl"
+          className="auth-card rounded-2xl p-6 sm:p-8"
         >
           <h2 className="text-xl font-semibold mb-6 text-center text-white">
             Get started
@@ -80,7 +80,7 @@ export default function Register({ onRegisterSuccess, onBackToLogin }) {
                 <input
                   type="text"
                   placeholder="Your Username"
-                  className="w-full pl-10 pr-4 py-2.5 bg-slate-800/50 border border-slate-700/50 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/50 transition-all text-white placeholder-slate-500"
+                  className="auth-input w-full pl-10 pr-4 py-2.5 rounded-xl focus:outline-none text-white placeholder-slate-500"
                   value={fullName}
                   onChange={(e) => setFullName(e.target.value)}
                   required
@@ -100,7 +100,7 @@ export default function Register({ onRegisterSuccess, onBackToLogin }) {
                 <input
                   type="email"
                   placeholder="you@company.com"
-                  className="w-full pl-10 pr-4 py-2.5 bg-slate-800/50 border border-slate-700/50 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/50 transition-all text-white placeholder-slate-500"
+                  className="auth-input w-full pl-10 pr-4 py-2.5 rounded-xl focus:outline-none text-white placeholder-slate-500"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
@@ -120,7 +120,7 @@ export default function Register({ onRegisterSuccess, onBackToLogin }) {
                 <input
                   type="password"
                   placeholder="••••••••"
-                  className="w-full pl-10 pr-4 py-2.5 bg-slate-800/50 border border-slate-700/50 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/50 transition-all text-white placeholder-slate-500"
+                  className="auth-input w-full pl-10 pr-4 py-2.5 rounded-xl focus:outline-none text-white placeholder-slate-500"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required

@@ -24,9 +24,9 @@ function Login({ onLogin, onGoRegister }) {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden">
+    <div className="min-h-screen auth-shell flex items-center justify-center p-4 relative overflow-hidden">
       {/* Animated gradient background */}
-      <div className="fixed inset-0 bg-gradient-to-br from-slate-900 via-blue-950 to-slate-900 animated-gradient" />
+      <div className="fixed inset-0 animated-gradient" />
 
       {/* Decorative orbs */}
       <div className="fixed top-1/4 left-1/4 w-96 h-96 bg-blue-500/20 rounded-full blur-3xl" />
@@ -54,7 +54,7 @@ function Login({ onLogin, onGoRegister }) {
 
         {/* Card */}
         <form
-          className="glass-dark rounded-2xl p-6 sm:p-8 shadow-2xl"
+          className="auth-card rounded-2xl p-6 sm:p-8"
           onSubmit={handleSubmit}
         >
           <h2 className="text-xl font-semibold mb-6 text-center text-white">
@@ -80,7 +80,7 @@ function Login({ onLogin, onGoRegister }) {
                 <input
                   type="email"
                   placeholder="you@company.com"
-                  className="w-full pl-10 pr-4 py-2.5 bg-slate-800/50 border border-slate-700/50 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/50 transition-all text-white placeholder-slate-500"
+                  className="auth-input w-full pl-10 pr-4 py-2.5 rounded-xl focus:outline-none text-white placeholder-slate-500"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
@@ -100,7 +100,7 @@ function Login({ onLogin, onGoRegister }) {
                 <input
                   type="password"
                   placeholder="••••••••"
-                  className="w-full pl-10 pr-4 py-2.5 bg-slate-800/50 border border-slate-700/50 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/50 transition-all text-white placeholder-slate-500"
+                  className="auth-input w-full pl-10 pr-4 py-2.5 rounded-xl focus:outline-none text-white placeholder-slate-500"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required

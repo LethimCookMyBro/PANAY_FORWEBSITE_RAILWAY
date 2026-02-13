@@ -701,9 +701,9 @@ export default function Chat({ onLogout }) {
   const renderInputBar = (centered = false) => (
     <form
       onSubmit={handleSend}
-      className={`w-full ${centered ? "max-w-2xl" : "max-w-3xl"} mx-auto flex items-end gap-2`}
+      className={`chat-composer-form w-full ${centered ? "max-w-3xl" : "max-w-4xl"} mx-auto flex items-end gap-2`}
     >
-      <div className="liquid-input-wrap glass-input flex-1 rounded-[26px] px-3 py-2.5 transition-all shadow-lg shadow-black/5">
+      <div className="liquid-input-wrap glass-input chat-composer-shell flex-1 rounded-[26px] px-3 py-2.5 transition-all shadow-lg shadow-black/5">
         <textarea
           ref={inputRef}
           rows={1}
@@ -717,7 +717,7 @@ export default function Chat({ onLogout }) {
                 ? "Transcribing..."
                 : "Ask about PLC, automation, troubleshooting..."
           }
-          className="composer-textarea w-full bg-transparent focus:outline-none text-slate-800 placeholder-slate-400 px-2 py-1.5 resize-none text-base"
+          className="composer-textarea w-full bg-transparent focus:outline-none text-slate-800 placeholder-slate-400 px-2 py-1.5 resize-none text-[15px] leading-6"
           disabled={isLoading || isRecording || isTranscribing}
         />
         <div className="flex items-center justify-end gap-1 pr-1">
@@ -731,12 +731,12 @@ export default function Chat({ onLogout }) {
                   : startRecording
             }
             disabled={isLoading}
-            className={`p-2 rounded-full transition-all flex-shrink-0 ${
+            className={`p-2.5 rounded-full transition-all flex-shrink-0 ${
               isRecording
                 ? "bg-red-500 text-white animate-pulse"
                 : isTranscribing
                   ? "bg-orange-100 text-orange-500"
-                  : "hover:bg-slate-100/80 text-slate-400 hover:text-slate-600"
+                  : "hover:bg-white/90 text-slate-400 hover:text-slate-700 border border-transparent hover:border-slate-200/80"
             }`}
           >
             {isTranscribing ? (
@@ -752,7 +752,7 @@ export default function Chat({ onLogout }) {
             disabled={
               isLoading || !input.trim() || isRecording || isTranscribing
             }
-            className="bg-gradient-to-r from-blue-500 to-cyan-500 text-white p-2 rounded-full hover:from-blue-600 hover:to-cyan-600 disabled:opacity-30 disabled:cursor-not-allowed transition-all shadow-md shadow-blue-500/20 flex-shrink-0"
+            className="bg-gradient-to-r from-blue-500 to-cyan-500 text-white p-2.5 rounded-full hover:from-blue-600 hover:to-cyan-600 disabled:opacity-30 disabled:cursor-not-allowed transition-all shadow-md shadow-blue-500/25 flex-shrink-0 border border-blue-300/30"
           >
             {isLoading ? (
               <LoaderCircle size={18} className="animate-spin" />
@@ -790,7 +790,7 @@ export default function Chat({ onLogout }) {
             ? `fixed top-0 left-0 h-full z-50 transform transition-transform duration-200 ease-out ${sidebarCollapsed ? "-translate-x-full" : "translate-x-0"} w-72`
             : `${sidebarCollapsed ? "w-16" : "w-72"} transition-[width] duration-200 ease-out`
         }
-        p-4 glass-dark border-r border-slate-800/50 flex flex-col overflow-hidden shadow-xl shadow-slate-950/30
+        p-4 glass-dark chat-sidebar-surface border-r border-slate-800/50 flex flex-col overflow-hidden shadow-xl shadow-slate-950/30
       `}
       >
         {/* Logo */}
@@ -834,7 +834,7 @@ export default function Chat({ onLogout }) {
         {/* New Chat */}
         <button
           onClick={handleNewChat}
-          className={`flex items-center justify-center gap-2 w-full p-3 mb-4 bg-gradient-to-r from-blue-500 to-cyan-500 text-white hover:from-blue-600 hover:to-cyan-600 rounded-xl transition-all text-sm font-semibold shadow-lg shadow-blue-500/20 ${!isCompactLayout && sidebarCollapsed ? "px-0" : ""}`}
+          className={`flex items-center justify-center gap-2 w-full p-3 mb-4 bg-gradient-to-r from-blue-500 to-cyan-500 text-white hover:from-blue-600 hover:to-cyan-600 rounded-xl transition-all text-sm font-semibold shadow-lg shadow-blue-500/20 border border-cyan-300/30 ${!isCompactLayout && sidebarCollapsed ? "px-0" : ""}`}
         >
           <Plus size={18} />
           {(isCompactLayout || !sidebarCollapsed) && "New Chat"}
@@ -884,8 +884,8 @@ export default function Chat({ onLogout }) {
                   setPendingMessage(null);
                   if (isCompactLayout) setSidebarCollapsed(true);
                 }}
-                className={`group relative w-full text-left px-3 py-2.5 rounded-lg flex items-center gap-3 cursor-pointer transition-all
-                  ${chat.id === activeChatId ? "bg-white/10 text-white" : "text-slate-400 hover:bg-white/5 hover:text-slate-200"}`}
+                className={`chat-session-item group relative w-full text-left px-3 py-2.5 rounded-lg flex items-center gap-3 cursor-pointer transition-all
+                  ${chat.id === activeChatId ? "chat-session-item-active text-white" : "chat-session-item-idle text-slate-400 hover:text-slate-200"}`}
               >
                 <div className="relative flex-shrink-0">
                   <MessageSquareText
@@ -916,7 +916,7 @@ export default function Chat({ onLogout }) {
                   </div>
                 )}
                 {!sidebarCollapsed && (
-                  <div className="absolute right-1 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div className="absolute right-1 flex items-center gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
                     <button
                       onClick={(e) => togglePin(e, chat.id)}
                       className={`p-1 rounded ${pinnedChats.includes(chat.id) ? "text-amber-400" : "text-slate-500 hover:text-amber-400"}`}
@@ -966,10 +966,10 @@ export default function Chat({ onLogout }) {
       </aside>
 
       {/* ===== MAIN AREA ===== */}
-      <div className="flex-1 flex flex-col h-full relative z-10">
+      <div className="flex-1 flex flex-col h-full relative z-10 chat-main-surface">
         {/* Header */}
-        <header className="h-12 glass border-b border-slate-200/40 flex items-center justify-between px-5 shrink-0 z-10">
-          <div className="flex items-center gap-3">
+        <header className="h-14 glass border-b border-slate-200/40 flex items-center justify-between px-4 sm:px-6 shrink-0 z-10">
+          <div className="flex items-center gap-3 min-w-0">
             {isCompactLayout && (
               <button
                 onClick={() => setSidebarCollapsed(false)}
@@ -978,13 +978,20 @@ export default function Chat({ onLogout }) {
                 <Menu size={20} />
               </button>
             )}
-            <span className="font-semibold text-slate-700 text-sm truncate max-w-[300px]">
-              {activeChat
-                ? activeChat.title?.length > 45
-                  ? activeChat.title.slice(0, 45) + "..."
-                  : activeChat.title || "New Chat"
-                : "New Chat"}
-            </span>
+            <div className="min-w-0">
+              <span className="font-semibold text-slate-800 text-sm truncate block max-w-[320px] sm:max-w-[420px]">
+                {activeChat
+                  ? activeChat.title?.length > 45
+                    ? activeChat.title.slice(0, 45) + "..."
+                    : activeChat.title || "New Chat"
+                  : "New Chat"}
+              </span>
+              <span className="text-[11px] text-slate-500">Panya Assistant</span>
+            </div>
+          </div>
+          <div className="hidden sm:flex items-center gap-2 text-[11px] font-medium text-slate-500">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_0_3px_rgba(16,185,129,0.15)]" />
+            Ready
           </div>
         </header>
 
@@ -1020,10 +1027,10 @@ export default function Chat({ onLogout }) {
               <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-500 to-cyan-400 shadow-xl shadow-blue-500/20 mb-5">
                 <Sparkles size={28} className="text-white" />
               </div>
-              <h2 className="text-2xl font-bold text-slate-800 mb-2">
+              <h2 className="text-2xl sm:text-3xl font-bold text-slate-800 mb-2">
                 Hey{user.full_name ? `, ${user.full_name.split(" ")[0]}` : ""}!
               </h2>
-              <p className="text-slate-400 max-w-md text-sm">
+              <p className="text-slate-500 max-w-xl text-sm sm:text-[15px] leading-relaxed">
                 Your PLC & Industrial Automation expert. Ask me anything about
                 troubleshooting, error codes, or technical docs.
               </p>
@@ -1039,7 +1046,7 @@ export default function Chat({ onLogout }) {
 
             {/* Quick prompts */}
             <div
-              className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-w-2xl w-full fade-in-up"
+              className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-3xl w-full fade-in-up"
               style={{ animationDelay: "0.2s" }}
             >
               {[
@@ -1054,7 +1061,7 @@ export default function Chat({ onLogout }) {
                     setInput(q);
                     inputRef.current?.focus();
                   }}
-                  className="text-left px-4 py-3 glass-prompt rounded-xl text-sm text-slate-500 hover:text-blue-600 hover:border-blue-200 transition-all"
+                  className="text-left px-4 py-3.5 glass-prompt rounded-2xl text-sm text-slate-600 hover:text-blue-700 hover:border-blue-200 transition-all shadow-sm"
                 >
                   {q}
                 </button>
@@ -1072,7 +1079,7 @@ export default function Chat({ onLogout }) {
               ref={messagesContainerRef}
               className={`flex-1 overflow-y-auto p-4 sm:p-6 scroll-smooth ${apiError ? "pt-16 sm:pt-14" : ""}`}
             >
-              <div className="max-w-3xl mx-auto flex flex-col gap-5 pb-4">
+              <div className="max-w-4xl mx-auto flex flex-col gap-5 pb-4">
                 {activeMessages.map((m, i) => {
                   const processingTime = Number(m?.processingTime);
                   const hasProcessingTime =
@@ -1097,8 +1104,8 @@ export default function Chat({ onLogout }) {
                             m.sender === "user"
                               ? m.status === "failed"
                                 ? "bg-red-500 text-white rounded-br-md shadow-md shadow-red-500/20 border border-red-400/60"
-                                : "bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-br-md shadow-md shadow-blue-500/15"
-                              : "bg-white text-slate-700 border border-slate-100 rounded-bl-md shadow-sm prose prose-sm max-w-none"
+                                : "bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-br-md shadow-md shadow-blue-500/20 border border-blue-300/20"
+                              : "bg-white/90 backdrop-blur text-slate-700 border border-white/80 rounded-bl-md shadow-md prose prose-sm max-w-none"
                           }`}
                           style={{ overflowWrap: "anywhere" }}
                         >
@@ -1136,7 +1143,7 @@ export default function Chat({ onLogout }) {
                           )}
                           <button
                             onClick={() => copyMsg(m.text, i)}
-                            className="p-1 rounded hover:bg-slate-100 text-slate-300 hover:text-slate-500 transition-all"
+                            className="p-1 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-all"
                           >
                             {copiedId === i ? (
                               <Check size={12} className="text-green-500" />
@@ -1149,7 +1156,7 @@ export default function Chat({ onLogout }) {
                               setInput(m.text);
                               inputRef.current?.focus();
                             }}
-                            className="p-1 rounded hover:bg-blue-50 text-slate-300 hover:text-blue-500 transition-all"
+                            className="p-1 rounded hover:bg-blue-50 text-slate-400 hover:text-blue-500 transition-all"
                           >
                             <CornerDownLeft size={12} />
                           </button>
@@ -1193,7 +1200,7 @@ export default function Chat({ onLogout }) {
                     <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-400 flex items-center justify-center flex-shrink-0 shadow-sm pulse-glow">
                       <Bot size={14} className="text-white" />
                     </div>
-                    <div className="bg-white px-5 py-3.5 rounded-2xl border border-slate-100 shadow-sm">
+                    <div className="bg-white/90 backdrop-blur px-5 py-3.5 rounded-2xl border border-white shadow-md">
                       <div className="flex items-center gap-1.5">
                         <span className="typing-dot"></span>
                         <span className="typing-dot"></span>
@@ -1207,7 +1214,7 @@ export default function Chat({ onLogout }) {
             </div>
 
             {/* Bottom Input */}
-            <div className="p-3 glass border-t border-slate-200/40 shrink-0 chat-composer-safe">
+            <div className="p-3 glass border-t border-slate-200/40 shrink-0 chat-composer-safe chat-dock">
               {renderInputBar(false)}
               <p className="text-center text-[10px] text-slate-400 mt-2">
                 Panya may make mistakes. Verify important information.
