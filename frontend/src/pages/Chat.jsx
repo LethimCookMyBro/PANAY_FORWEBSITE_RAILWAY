@@ -717,7 +717,7 @@ export default function Chat({ onLogout }) {
                 ? "Transcribing..."
                 : "Ask about PLC, automation, troubleshooting..."
           }
-          className="composer-textarea w-full bg-transparent focus:outline-none text-slate-800 placeholder-slate-400 px-2 py-1.5 resize-none text-[15px] leading-6"
+          className="composer-textarea w-full bg-transparent focus:outline-none text-slate-900 placeholder-slate-500 px-2 py-1.5 resize-none text-[15px] leading-6"
           disabled={isLoading || isRecording || isTranscribing}
         />
         <div className="flex items-center justify-end gap-1 pr-1">
@@ -787,7 +787,7 @@ export default function Chat({ onLogout }) {
         className={`
         ${
           isCompactLayout
-            ? `fixed top-0 left-0 h-full z-50 transform transition-transform duration-200 ease-out ${sidebarCollapsed ? "-translate-x-full" : "translate-x-0"} w-72`
+            ? `fixed top-0 left-0 h-full z-50 transform transition-transform duration-200 ease-out ${sidebarCollapsed ? "-translate-x-full" : "translate-x-0"} w-[85vw] max-w-[20rem] sm:w-72`
             : `${sidebarCollapsed ? "w-16" : "w-72"} transition-[width] duration-200 ease-out`
         }
         p-4 glass-dark chat-sidebar-surface border-r border-slate-800/50 flex flex-col overflow-hidden shadow-xl shadow-slate-950/30
@@ -806,7 +806,7 @@ export default function Chat({ onLogout }) {
                 <h1 className="text-lg font-bold text-white tracking-tight">
                   Panya
                 </h1>
-                <p className="text-[11px] font-medium text-cyan-400/50 uppercase tracking-wider">
+                <p className="text-[11px] font-semibold text-cyan-300/85 uppercase tracking-wider">
                   PLC Assistant
                 </p>
               </div>
@@ -819,7 +819,7 @@ export default function Chat({ onLogout }) {
           )}
           <button
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-            className="p-2 hover:bg-white/5 rounded-lg transition-all text-slate-400 hover:text-white"
+            className="p-2 hover:bg-white/10 rounded-lg transition-all text-slate-300 hover:text-white"
           >
             {isCompactLayout ? (
               <X size={20} />
@@ -845,19 +845,19 @@ export default function Chat({ onLogout }) {
           <div className="relative mb-3">
             <Search
               size={14}
-              className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
             />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search chats..."
-              className="w-full pl-9 pr-8 py-2 text-sm bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-1 focus:ring-cyan-500/30 text-slate-200 placeholder-slate-500"
+              className="w-full pl-9 pr-8 py-2.5 text-sm bg-slate-950/45 border border-slate-600/55 rounded-lg focus:outline-none focus:ring-1 focus:ring-cyan-400/55 text-slate-100 placeholder-slate-400"
             />
             {searchQuery && (
               <button
                 onClick={() => setSearchQuery("")}
-                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 hover:bg-white/10 rounded text-slate-500"
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 hover:bg-white/10 rounded text-slate-400"
               >
                 <X size={14} />
               </button>
@@ -867,14 +867,14 @@ export default function Chat({ onLogout }) {
 
         {/* Label */}
         {(isCompactLayout || !sidebarCollapsed) && (
-          <div className="px-2 mb-2 text-[10px] font-semibold text-slate-500 uppercase tracking-widest">
+          <div className="px-2 mb-2 text-[11px] font-semibold text-slate-300/85 uppercase tracking-widest">
             {searchQuery ? `Results (${sortedChats.length})` : "Recent"}
           </div>
         )}
 
         {/* Chat list */}
         {(isCompactLayout || !sidebarCollapsed) && (
-          <div className="flex-1 overflow-y-auto space-y-0.5 pr-1 sidebar-scroll">
+          <div className="flex-1 overflow-y-auto space-y-1 pr-1 sidebar-scroll">
             {sortedChats.map((chat) => (
               <div
                 key={chat.id}
@@ -885,7 +885,7 @@ export default function Chat({ onLogout }) {
                   if (isCompactLayout) setSidebarCollapsed(true);
                 }}
                 className={`chat-session-item group relative w-full text-left px-3 py-2.5 rounded-lg flex items-center gap-3 cursor-pointer transition-all
-                  ${chat.id === activeChatId ? "chat-session-item-active text-white" : "chat-session-item-idle text-slate-400 hover:text-slate-200"}`}
+                  ${chat.id === activeChatId ? "chat-session-item-active text-white" : "chat-session-item-idle text-slate-300 hover:text-white"}`}
               >
                 <div className="relative flex-shrink-0">
                   <MessageSquareText
@@ -893,7 +893,7 @@ export default function Chat({ onLogout }) {
                     className={
                       chat.id === activeChatId
                         ? "text-cyan-400"
-                        : "text-slate-500"
+                        : "text-slate-400"
                     }
                   />
                   {pinnedChats.includes(chat.id) && (
@@ -909,7 +909,7 @@ export default function Chat({ onLogout }) {
                       {chat.title || "New Chat"}
                     </span>
                     {chat.updated_at && (
-                      <span className="text-[10px] text-slate-500">
+                      <span className="text-[11px] text-slate-400">
                         {formatTimeAgo(chat.updated_at)}
                       </span>
                     )}
@@ -919,7 +919,7 @@ export default function Chat({ onLogout }) {
                   <div className="absolute right-1 flex items-center gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
                     <button
                       onClick={(e) => togglePin(e, chat.id)}
-                      className={`p-1 rounded ${pinnedChats.includes(chat.id) ? "text-amber-400" : "text-slate-500 hover:text-amber-400"}`}
+                      className={`p-1 rounded ${pinnedChats.includes(chat.id) ? "text-amber-400" : "text-slate-400 hover:text-amber-300"}`}
                     >
                       <Pin
                         size={13}
@@ -930,7 +930,7 @@ export default function Chat({ onLogout }) {
                     </button>
                     <button
                       onClick={(e) => handleDelete(e, chat.id)}
-                      className="p-1 rounded text-slate-500 hover:text-red-400"
+                      className="p-1 rounded text-slate-400 hover:text-red-300"
                     >
                       <Trash2 size={13} />
                     </button>
@@ -950,14 +950,14 @@ export default function Chat({ onLogout }) {
           </div>
           {(isCompactLayout || !sidebarCollapsed) && (
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-slate-200 truncate">
+              <p className="text-sm font-semibold text-slate-100 truncate">
                 {user.full_name || user.name}
               </p>
             </div>
           )}
           <button
             onClick={onLogout}
-            className={`flex items-center gap-1.5 text-slate-500 hover:text-red-400 px-2 py-1.5 rounded-lg transition-all text-sm ${!isCompactLayout && sidebarCollapsed ? "mt-2" : ""}`}
+            className={`flex items-center gap-1.5 text-slate-300 hover:text-red-300 px-2 py-1.5 rounded-lg transition-all text-sm ${!isCompactLayout && sidebarCollapsed ? "mt-2" : ""}`}
           >
             <LogOut size={16} />
             {(isCompactLayout || !sidebarCollapsed) && <span>Logout</span>}
@@ -986,10 +986,10 @@ export default function Chat({ onLogout }) {
                     : activeChat.title || "New Chat"
                   : "New Chat"}
               </span>
-              <span className="text-[11px] text-slate-500">Panya Assistant</span>
+              <span className="text-[11px] text-slate-600">Panya Assistant</span>
             </div>
           </div>
-          <div className="hidden sm:flex items-center gap-2 text-[11px] font-medium text-slate-500">
+          <div className="hidden sm:flex items-center gap-2 text-[11px] font-semibold text-slate-600">
             <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_0_3px_rgba(16,185,129,0.15)]" />
             Ready
           </div>
@@ -1030,7 +1030,7 @@ export default function Chat({ onLogout }) {
               <h2 className="text-2xl sm:text-3xl font-bold text-slate-800 mb-2">
                 Hey{user.full_name ? `, ${user.full_name.split(" ")[0]}` : ""}!
               </h2>
-              <p className="text-slate-500 max-w-xl text-sm sm:text-[15px] leading-relaxed">
+              <p className="text-slate-600 max-w-xl text-sm sm:text-[15px] leading-relaxed">
                 Your PLC & Industrial Automation expert. Ask me anything about
                 troubleshooting, error codes, or technical docs.
               </p>
@@ -1061,7 +1061,7 @@ export default function Chat({ onLogout }) {
                     setInput(q);
                     inputRef.current?.focus();
                   }}
-                  className="text-left px-4 py-3.5 glass-prompt rounded-2xl text-sm text-slate-600 hover:text-blue-700 hover:border-blue-200 transition-all shadow-sm"
+                  className="text-left px-4 py-3.5 glass-prompt rounded-2xl text-sm font-medium text-slate-700 hover:text-blue-800 hover:border-blue-200 transition-all shadow-sm"
                 >
                   {q}
                 </button>
@@ -1079,7 +1079,7 @@ export default function Chat({ onLogout }) {
               ref={messagesContainerRef}
               className={`flex-1 overflow-y-auto p-4 sm:p-6 scroll-smooth ${apiError ? "pt-16 sm:pt-14" : ""}`}
             >
-              <div className="max-w-4xl mx-auto flex flex-col gap-5 pb-4">
+              <div className="max-w-4xl mx-auto min-h-full flex flex-col justify-end gap-5 pb-3 sm:pb-4">
                 {activeMessages.map((m, i) => {
                   const processingTime = Number(m?.processingTime);
                   const hasProcessingTime =
@@ -1105,7 +1105,7 @@ export default function Chat({ onLogout }) {
                               ? m.status === "failed"
                                 ? "bg-red-500 text-white rounded-br-md shadow-md shadow-red-500/20 border border-red-400/60"
                                 : "bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-br-md shadow-md shadow-blue-500/20 border border-blue-300/20"
-                              : "bg-white/90 backdrop-blur text-slate-700 border border-white/80 rounded-bl-md shadow-md prose prose-sm max-w-none"
+                              : "bg-white/95 backdrop-blur text-slate-800 border border-slate-200/75 rounded-bl-md shadow-md prose prose-sm max-w-none"
                           }`}
                           style={{ overflowWrap: "anywhere" }}
                         >
@@ -1137,7 +1137,7 @@ export default function Chat({ onLogout }) {
                           className={`flex items-center gap-1 mt-1 ${m.sender === "user" ? "flex-row-reverse" : ""}`}
                         >
                           {m.timestamp && (
-                            <span className="text-[10px] text-slate-300 px-1">
+                            <span className="text-[10px] text-slate-400 px-1">
                               {formatTime(m.timestamp)}
                             </span>
                           )}

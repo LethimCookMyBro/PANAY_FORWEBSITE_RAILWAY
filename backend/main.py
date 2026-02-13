@@ -63,7 +63,18 @@ from app.routes_auth import router as auth_router
 from app.routes_chat import router as chat_router
 from app.routes_auth import get_current_user
 from app.chat_db import get_user_chat_history
-from app.seed import seed_golden_qa_if_empty, should_auto_seed
+from app.seed import (
+    auto_embed_knowledge_if_empty,
+    get_auto_embed_batch_size,
+    get_auto_embed_chunk_overlap,
+    get_auto_embed_chunk_size,
+    get_auto_embed_knowledge_dir,
+    get_default_golden_qa_path,
+    seed_golden_qa_if_empty,
+    should_auto_embed_force_rescan,
+    should_auto_embed_knowledge,
+    should_auto_seed,
+)
 
 # Local imports
 from app.retriever import (
@@ -666,14 +677,34 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"🔥 Failed to load embedder: {e}")
 
-    # Optional bootstrap seeding so fresh deployments can answer from bundled QA data.
+    # Optional bootstrap embedding so fresh deployments can answer from bundled docs.
+    if should_auto_embed_knowledge() and app.state.embedder is not None:
+        try:
+            auto_embed_result = auto_embed_knowledge_if_empty(
+                db_pool=app.state.db_pool,
+                embedder=app.state.embedder,
+                collection=config.DEFAULT_COLLECTION,
+                knowledge_dir=get_auto_embed_knowledge_dir(),
+                batch_size=get_auto_embed_batch_size(),
+                chunk_size=get_auto_embed_chunk_size(),
+                chunk_overlap=get_auto_embed_chunk_overlap(),
+                sync_if_not_empty=True,
+                skip_known_sources=not should_auto_embed_force_rescan(),
+            )
+            logger.info("📚 Knowledge auto-embed result: %s", auto_embed_result)
+        except Exception as e:
+            logger.error(f"🔥 Knowledge auto-embed failed: {e}", exc_info=True)
+
+    # Optional fallback seed from golden_qa.json.
     if should_auto_seed() and app.state.embedder is not None:
         try:
             seed_result = seed_golden_qa_if_empty(
                 db_pool=app.state.db_pool,
                 embedder=app.state.embedder,
                 collection=config.DEFAULT_COLLECTION,
-                json_path=os.getenv("GOLDEN_QA_PATH", "/app/data/Knowledge/golden_qa.json"),
+                json_path=get_default_golden_qa_path(
+                    (os.getenv("GOLDEN_QA_PATH", "") or "").strip()
+                ),
             )
             logger.info(f"🌱 Golden QA seed result: {seed_result}")
         except Exception as e:
