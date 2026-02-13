@@ -326,6 +326,87 @@ def get_doc_score(doc) -> Optional[float]:
     return None
 
 
+def _coerce_positive_int(value: Any) -> int:
+    if value is None or isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value if value > 0 else 0
+    if isinstance(value, float):
+        page = int(value)
+        return page if page > 0 else 0
+    if isinstance(value, str):
+        match = re.search(r"\d+", value.strip())
+        if match:
+            try:
+                page = int(match.group(0))
+                return page if page > 0 else 0
+            except Exception:
+                return 0
+    return 0
+
+
+def _doc_source_page(doc, fallback_index: int = 0) -> Dict[str, Any]:
+    metadata = getattr(doc, "metadata", {}) or {}
+    source = metadata.get("source") or f"Document {fallback_index + 1}"
+    source = os.path.basename(str(source).strip()) or f"Document {fallback_index + 1}"
+    page = _coerce_positive_int(metadata.get("page"))
+    if page <= 0:
+        content = getattr(doc, "page_content", "") or ""
+        snippet = content[:1000]
+        for pattern in (
+            r"---\s*PAGE\s*(\d{1,5})\s*---",
+            r"\bpage\s*[:#-]?\s*(\d{1,5})\b",
+        ):
+            match = re.search(pattern, snippet, flags=re.IGNORECASE)
+            if match:
+                page = _coerce_positive_int(match.group(1))
+                if page > 0:
+                    break
+    return {"source": source, "page": page}
+
+
+def build_source_citations(selected_docs: List, max_items: int = 6) -> List[Dict[str, Any]]:
+    citations: List[Dict[str, Any]] = []
+    seen = set()
+
+    for i, doc in enumerate(selected_docs or []):
+        item = _doc_source_page(doc, fallback_index=i)
+        key = (item["source"], item["page"])
+        if key in seen:
+            continue
+        seen.add(key)
+        citations.append(item)
+        if len(citations) >= max_items:
+            break
+
+    return citations
+
+
+def format_source_citations(citations: List[Dict[str, Any]]) -> str:
+    if not citations:
+        return ""
+
+    lines = ["Sources:"]
+    for item in citations:
+        source = item.get("source", "Unknown source")
+        page = _coerce_positive_int(item.get("page"))
+        if page > 0:
+            lines.append(f"- {source}, page {page}")
+        else:
+            lines.append(f"- {source}")
+    return "\n".join(lines)
+
+
+def append_source_citations(reply: str, citations: List[Dict[str, Any]]) -> str:
+    text = str(reply or "").strip()
+    if not text or not citations:
+        return text
+    lowered = text.lower()
+    if "sources:" in lowered or "source:" in lowered or "อ้างอิง" in text:
+        return text
+    return text + "\n\n" + format_source_citations(citations)
+
+
 # ============================================================
 # CONTEXT SELECTION
 # ============================================================
@@ -437,7 +518,7 @@ CRITICAL RULES:
 - Answer using information from the context above
 - If the answer is NOT found, say: "I couldn't find specific information about this."
 - DO NOT make up facts or specifications
-- DO NOT mention "Document", "Source", "Context", or reference numbers in your answer - just provide the information naturally
+- If context tags include [Source: ... | Page: ...], use them as evidence and never invent page numbers
 - Answer ONLY the CURRENT QUESTION below
 
 FORMATTING:
@@ -581,8 +662,7 @@ def answer_question(
     rerank_time = t_rerank_end - t_rerank_start
 
     context_texts = [d.page_content for d in selected_docs]
-    # Get source names for proper citation
-    context_sources = [d.metadata.get('source', f'Document {i+1}') for i, d in enumerate(selected_docs)]
+    citation_items = build_source_citations(selected_docs)
     max_score = get_doc_score(retrieved_docs[0]) if retrieved_docs else None
 
 
@@ -591,9 +671,17 @@ def answer_question(
     t_llm_start = time.perf_counter()
     
     if context_texts:
-        # Format context with actual source names for proper citation
+        context_headers = []
+        for i, doc in enumerate(selected_docs):
+            source_page = _doc_source_page(doc, fallback_index=i)
+            page = source_page["page"]
+            page_label = str(page) if page > 0 else "unknown"
+            context_headers.append(
+                f"[Source: {source_page['source']} | Page: {page_label}]"
+            )
+
         context_str = "\n\n---\n\n".join(
-            f"[Source: {src}]\n{c}" for src, c in zip(context_sources, context_texts)
+            f"{header}\n{content}" for header, content in zip(context_headers, context_texts)
         )
         prompt_template = build_enhanced_prompt()
         prompt_inputs = {
@@ -641,7 +729,8 @@ def answer_question(
 
     # ============ RAGAS EVALUATION ============
     ragas_scores = None
-    enable_chat_ragas = _env_bool("ENABLE_CHAT_RAGAS", False)
+    enable_chat_ragas = _env_bool("ENABLE_CHAT_RAGAS", True)
+    allow_source_citations = True
 
     if enable_chat_ragas and context_texts:
         # Check if this is an identity/greeting question that should skip RAGAS check
@@ -682,9 +771,13 @@ def answer_question(
                             f"⚠️ Low quality response detected (avg={avg_quality:.2f} < {RAGAS_MIN_THRESHOLD}). "
                             f"Replacing with 'I don't know' message."
                         )
+                        allow_source_citations = False
         except Exception as e:
             logger.warning(f"RAGAS evaluation failed: {e}")
             ragas_scores = None
+
+    if allow_source_citations and _env_bool("APPEND_SOURCE_CITATIONS", True):
+        reply = append_source_citations(reply, citation_items)
 
     total_time = time.perf_counter() - t0
 
@@ -712,4 +805,6 @@ def answer_question(
         "context_count": len(context_texts),
         "max_score": max_score,
         "ragas": ragas_scores,
+        "sources": citation_items if allow_source_citations else [],
+        "contexts_list": context_texts,
     }

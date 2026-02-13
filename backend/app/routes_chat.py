@@ -258,6 +258,7 @@ def chat(
             metadata={
                 "processing_time": result.get("processing_time", 0.0),
                 "ragas": result.get("ragas"),
+                "sources": result.get("sources", []),
                 "error": (result.get("metadata") or {}).get("error"),
             },
         )
@@ -277,10 +278,12 @@ def chat(
         "reply": result["reply"],
         "processing_time": result.get("processing_time", 0.0),
         "ragas": result.get("ragas"),
+        "sources": result.get("sources", []),
         "metadata": {
             "retrieval_time": result.get("retrieval_time", 0.0),
             "context_count": result.get("context_count", 0),
             "max_score": result.get("max_score"),
+            "sources": result.get("sources", []),
             "error": (result.get("metadata") or {}).get("error"),
             "storage_warning": None if assistant_saved else "assistant_message_not_saved",
         },

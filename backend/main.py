@@ -833,6 +833,7 @@ class ChatResponse(BaseModel):
     retrieval_time: Optional[float] = None
     context_count: Optional[int] = None
     ragas: Optional[dict] = None
+    sources: Optional[List[dict]] = None
 
 
 class HealthResponse(BaseModel):
@@ -993,6 +994,7 @@ def agent_chat(
             "retrieval_time": 0,
             "context_count": 0,
             "contexts": [],
+            "sources": [],
             "mode": mode,
             "web_searched": bool(web_context),
             "file_processed": file.filename if file else None
@@ -1061,6 +1063,7 @@ def agent_chat(
         "retrieval_time": result.get("retrieval_time"),
         "context_count": result.get("context_count"),
         "contexts": contexts,
+        "sources": result.get("sources", []),
         "mode": mode,
         "use_rerank": parsed_rerank,
         "file_processed": file.filename if file else None
