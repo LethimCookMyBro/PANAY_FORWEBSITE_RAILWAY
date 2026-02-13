@@ -9,6 +9,7 @@ import re
 import time
 import os
 import requests
+from urllib.parse import urlparse, urlunparse, urljoin
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -62,6 +63,23 @@ def _env_bool(key: str, default: bool = False) -> bool:
     return str(val).strip().lower() in ("1", "true", "yes", "y", "on")
 
 
+def _normalize_ollama_base_url(raw_url: str) -> str:
+    value = (raw_url or "").strip()
+    if not value:
+        return "http://ollama:11434"
+
+    parsed = urlparse(value)
+    if not parsed.scheme:
+        value = f"http://{value}"
+        parsed = urlparse(value)
+
+    host = (parsed.hostname or "").lower()
+    scheme = (parsed.scheme or "").lower()
+    if scheme == "http" and host.endswith(".railway.app"):
+        return urlunparse(parsed._replace(scheme="https"))
+    return value
+
+
 def _is_method_not_allowed_error(exc: Exception) -> bool:
     msg = str(exc or "").lower()
     return "405" in msg and "method not allowed" in msg
@@ -84,25 +102,45 @@ def _extract_llm_text(value: Any) -> str:
 
 
 def _invoke_ollama_chat_fallback(prompt: str) -> str:
-    base_url = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434").rstrip("/")
+    base_url = _normalize_ollama_base_url(
+        os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
+    ).rstrip("/")
     model = os.getenv("OLLAMA_MODEL", "llama3.2")
     timeout = int(os.getenv("LLM_TIMEOUT", "180"))
     num_predict = int(os.getenv("LLM_NUM_PREDICT", "1024"))
     temperature = float(os.getenv("LLM_TEMPERATURE", "0.7"))
 
-    response = requests.post(
-        f"{base_url}/api/chat",
-        json={
-            "model": model,
-            "stream": False,
-            "messages": [{"role": "user", "content": prompt}],
-            "options": {
-                "temperature": temperature,
-                "num_predict": num_predict,
-            },
+    request_payload = {
+        "model": model,
+        "stream": False,
+        "messages": [{"role": "user", "content": prompt}],
+        "options": {
+            "temperature": temperature,
+            "num_predict": num_predict,
         },
+    }
+
+    target_url = f"{base_url}/api/chat"
+    response = requests.post(
+        target_url,
+        json=request_payload,
         timeout=timeout,
+        allow_redirects=False,
     )
+    if response.status_code in {301, 302, 307, 308}:
+        redirected_url = response.headers.get("Location")
+        if redirected_url:
+            follow_url = (
+                redirected_url
+                if redirected_url.startswith("http")
+                else urljoin(target_url, redirected_url)
+            )
+            response = requests.post(
+                follow_url,
+                json=request_payload,
+                timeout=timeout,
+                allow_redirects=False,
+            )
     response.raise_for_status()
     payload = response.json() if response.content else {}
 

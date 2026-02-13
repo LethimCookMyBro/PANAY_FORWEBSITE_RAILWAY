@@ -40,6 +40,7 @@ import io
 from uuid import uuid4
 import mimetypes
 import warnings
+from urllib.parse import urlparse, urlunparse
 
 from contextlib import asynccontextmanager
 from typing import Any, Optional, List, Dict
@@ -85,13 +86,42 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 # CONFIGURATION
 # ============================================================================
 
+def normalize_ollama_base_url(raw_url: str) -> str:
+    """
+    Normalize Ollama base URL and prevent POST->GET downgrade on HTTP redirects.
+    Railway public domains should use HTTPS.
+    """
+    value = (raw_url or "").strip()
+    if not value:
+        return "http://ollama:11434"
+
+    parsed = urlparse(value)
+    if not parsed.scheme:
+        # Keep local container targets on plain HTTP by default.
+        value = f"http://{value}"
+        parsed = urlparse(value)
+
+    host = (parsed.hostname or "").lower()
+    scheme = (parsed.scheme or "").lower()
+    should_force_https = (
+        scheme == "http"
+        and host
+        and host.endswith(".railway.app")
+    )
+    if should_force_https:
+        return urlunparse(parsed._replace(scheme="https"))
+
+    return value
+
 class Config:
     """Centralized configuration management"""
 
     APP_ENV: str = (os.getenv("APP_ENV", "development") or "development").strip().lower()
     
     OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama3.2")
-    OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
+    OLLAMA_BASE_URL: str = normalize_ollama_base_url(
+        os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
+    )
     LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.7"))
     LLM_TIMEOUT: int = int(os.getenv("LLM_TIMEOUT", "180"))
     LLM_NUM_PREDICT: int = int(os.getenv("LLM_NUM_PREDICT", "1024"))  # Max output tokens
