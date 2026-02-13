@@ -22,8 +22,10 @@ import {
   Check,
   CornerDownLeft,
   Sparkles,
+  AlertTriangle,
+  RefreshCw,
 } from "lucide-react";
-import api, { getApiErrorMessage } from "../utils/api";
+import api, { getApiErrorMessage, retryApiRequest } from "../utils/api";
 import { useVoiceRecording } from "../hooks/useVoiceRecording";
 
 /* ============ HELPERS ============ */
@@ -129,16 +131,6 @@ const getResponseSessionId = (payload) => {
   return null;
 };
 
-const removeLastMatchingMessage = (messages, matcher) => {
-  const list = toArray(messages);
-  for (let i = list.length - 1; i >= 0; i -= 1) {
-    if (matcher(list[i])) {
-      return [...list.slice(0, i), ...list.slice(i + 1)];
-    }
-  }
-  return list;
-};
-
 const findFallbackSessionId = (payload, userText) => {
   const sessions = pickListPayload(payload, ["items", "sessions"])
     .map((s) => ({
@@ -163,6 +155,31 @@ const findFallbackSessionId = (payload, userText) => {
 
   return freshSessions[0]?.id ?? sessions[0]?.id ?? null;
 };
+
+const mapSessionsFromPayload = (payload) =>
+  pickListPayload(payload, ["items", "sessions"])
+    .map((s) => ({
+      id: normalizeChatId(s?.id ?? s?.session_id ?? s?.sessionId),
+      title: s?.title,
+      messages: [],
+      created_at: s?.created_at,
+      updated_at: s?.updated_at || s?.created_at,
+    }))
+    .filter((s) => s.id != null);
+
+const mapMessagesFromPayload = (payload) =>
+  pickListPayload(payload, ["items", "messages"]).map((m) => ({
+    id:
+      m?.id ??
+      m?.message_id ??
+      `${m?.created_at || Date.now()}-${m?.role || "msg"}-${Math.random().toString(36).slice(2, 8)}`,
+    text: m?.content || "",
+    sender: m?.role === "user" ? "user" : "bot",
+    timestamp: m?.created_at,
+    processingTime: m?.metadata?.processing_time,
+    ragas: m?.metadata?.ragas,
+    status: "sent",
+  }));
 
 const fixMarkdownTable = (text) => {
   if (!text?.includes("|")) return text;
@@ -191,6 +208,9 @@ const fixMarkdownTable = (text) => {
     .filter(Boolean)
     .join("\n");
 };
+
+const makeLocalMessageId = () =>
+  `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
 /* ============ MARKDOWN COMPONENTS (stable ref) ============ */
 const mdComponents = {
@@ -263,7 +283,7 @@ export default function Chat({ onLogout }) {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [isMobile, setIsMobile] = useState(false);
+  const [isCompactLayout, setIsCompactLayout] = useState(false);
   const [pinnedChats, setPinnedChats] = useState(() => {
     try {
       return toArray(JSON.parse(localStorage.getItem("pinnedChats") || "[]"))
@@ -277,9 +297,11 @@ export default function Chat({ onLogout }) {
   const [copiedId, setCopiedId] = useState(null);
   const [pendingMessage, setPendingMessage] = useState(null);
   const [apiError, setApiError] = useState("");
+  const [isRecovering, setIsRecovering] = useState(false);
 
   const chatEndRef = useRef(null);
   const inputRef = useRef(null);
+  const compactModeRef = useRef(null);
 
   const {
     isRecording,
@@ -317,11 +339,62 @@ export default function Chat({ onLogout }) {
   );
 
   /* ---- effects ---- */
+  const loadBootstrapData = useCallback(async () => {
+    const [profileRes, sessionsRes] = await Promise.all([
+      retryApiRequest(() => api.get("/api/auth/me"), {
+        retries: 2,
+        baseDelayMs: 550,
+      }),
+      retryApiRequest(() => api.get("/api/chat/sessions"), {
+        retries: 2,
+        baseDelayMs: 550,
+      }),
+    ]);
+
+    setUser(profileRes?.data || { full_name: "User" });
+
+    const sessions = mapSessionsFromPayload(sessionsRes?.data);
+    setChatHistory(sessions);
+    setActiveChatId((currentId) => {
+      if (currentId != null && sessions.some((s) => s.id === currentId)) {
+        return currentId;
+      }
+      return sessions[0]?.id ?? null;
+    });
+    setIsNewChat(sessions.length === 0);
+    setApiError("");
+    return sessions;
+  }, []);
+
+  const loadMessagesForSession = useCallback(async (sessionId) => {
+    const response = await retryApiRequest(
+      () => api.get(`/api/chat/sessions/${sessionId}`),
+      {
+        retries: 1,
+        baseDelayMs: 500,
+      },
+    );
+    const messages = mapMessagesFromPayload(response?.data);
+    setChatHistory((p) =>
+      p.map((c) => (c.id === sessionId ? { ...c, messages } : c)),
+    );
+    setApiError("");
+    return messages;
+  }, []);
+
   useEffect(() => {
     const check = () => {
-      const m = window.innerWidth < 768;
-      setIsMobile(m);
-      if (m) setSidebarCollapsed(true);
+      const width = window.innerWidth;
+      const nextCompact = width <= 1024;
+      setIsCompactLayout(nextCompact);
+
+      if (
+        compactModeRef.current == null ||
+        compactModeRef.current !== nextCompact
+      ) {
+        setSidebarCollapsed(nextCompact);
+        compactModeRef.current = nextCompact;
+      }
     };
     check();
     window.addEventListener("resize", check);
@@ -329,72 +402,35 @@ export default function Chat({ onLogout }) {
   }, []);
 
   useEffect(() => {
-    api
-      .get("/api/auth/me")
-      .then((r) => {
-        setUser(r.data);
-      })
-      .catch((err) => {
+    let cancelled = false;
+    (async () => {
+      try {
+        await loadBootstrapData();
+      } catch (err) {
+        if (cancelled) return;
         console.error(err);
-        setApiError(getApiErrorMessage(err, "Failed to load user profile"));
-      });
-  }, []);
-
-  useEffect(() => {
-    api
-      .get("/api/chat/sessions")
-      .then((r) => {
-        setApiError("");
-        const sessions = pickListPayload(r.data, ["items", "sessions"])
-          .map((s) => ({
-            id: normalizeChatId(s?.id),
-            title: s?.title,
-            messages: [],
-            created_at: s?.created_at,
-            updated_at: s?.updated_at || s?.created_at,
-          }))
-          .filter((s) => s.id != null);
-        setChatHistory(sessions);
-        if (sessions.length > 0) {
-          setActiveChatId(sessions[0].id);
-          setIsNewChat(false);
-        } else {
-          setActiveChatId(null);
-          setIsNewChat(true);
-        }
-      })
-      .catch((err) => {
-        console.error(err);
-        setApiError(getApiErrorMessage(err, "Failed to load chat sessions"));
-      });
-  }, []);
+        setApiError(getApiErrorMessage(err, "Failed to load chat data"));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [loadBootstrapData]);
 
   useEffect(() => {
     if (activeChatId == null) return;
     const chat = chatHistory.find((c) => c.id === activeChatId);
     if (toArray(chat?.messages).length > 0) return;
-    api
-      .get(`/api/chat/sessions/${activeChatId}`)
-      .then((r) => {
-        setApiError("");
-        const msgs = pickListPayload(r.data, ["items", "messages"]).map(
-          (m) => ({
-            text: m?.content || "",
-            sender: m?.role === "user" ? "user" : "bot",
-            timestamp: m?.created_at,
-            processingTime: m?.metadata?.processing_time,
-            ragas: m?.metadata?.ragas,
-          }),
-        );
-        setChatHistory((p) =>
-          p.map((c) => (c.id === activeChatId ? { ...c, messages: msgs } : c)),
-        );
-      })
-      .catch((err) => {
-        console.error(err);
-        setApiError(getApiErrorMessage(err, "Failed to load chat messages"));
-      });
-  }, [activeChatId]);
+    let cancelled = false;
+    loadMessagesForSession(activeChatId).catch((err) => {
+      if (cancelled) return;
+      console.error(err);
+      setApiError(getApiErrorMessage(err, "Failed to load chat messages"));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeChatId, chatHistory, loadMessagesForSession]);
 
   // Auto-focus input
   useEffect(() => {
@@ -420,8 +456,33 @@ export default function Chat({ onLogout }) {
     setInput("");
     setPendingMessage(null);
     setApiError("");
+    if (isCompactLayout) {
+      setSidebarCollapsed(true);
+    }
     setTimeout(() => inputRef.current?.focus(), 50);
   };
+
+  const handleRetryConnection = useCallback(async () => {
+    if (isRecovering) return;
+    setIsRecovering(true);
+    setApiError("");
+    try {
+      const sessions = await loadBootstrapData();
+      const hasCurrentSession =
+        activeChatId != null && sessions.some((s) => s.id === activeChatId);
+      const targetSessionId = hasCurrentSession
+        ? activeChatId
+        : sessions[0]?.id ?? null;
+      if (targetSessionId != null) {
+        await loadMessagesForSession(targetSessionId);
+      }
+    } catch (err) {
+      console.error(err);
+      setApiError(getApiErrorMessage(err, "Failed to reconnect backend"));
+    } finally {
+      setIsRecovering(false);
+    }
+  }, [activeChatId, isRecovering, loadBootstrapData, loadMessagesForSession]);
 
   const handleSend = useCallback(
     async (e) => {
@@ -430,9 +491,11 @@ export default function Chat({ onLogout }) {
       if (!trimmedInput || isLoading) return;
 
       const userMsg = {
+        id: makeLocalMessageId(),
         text: trimmedInput,
         sender: "user",
         timestamp: new Date().toISOString(),
+        status: "sent",
       };
       const requestStartsNewChat = activeChatId == null || isNewChat;
       setApiError("");
@@ -462,7 +525,13 @@ export default function Chat({ onLogout }) {
           (requestStartsNewChat ? null : normalizeChatId(activeChatId));
         if (sid == null && requestStartsNewChat) {
           try {
-            const sessionsRes = await api.get("/api/chat/sessions");
+            const sessionsRes = await retryApiRequest(
+              () => api.get("/api/chat/sessions"),
+              {
+                retries: 1,
+                baseDelayMs: 500,
+              },
+            );
             sid = findFallbackSessionId(sessionsRes?.data, userMsg.text);
           } catch (lookupErr) {
             console.warn("Session fallback lookup failed:", lookupErr);
@@ -506,12 +575,14 @@ export default function Chat({ onLogout }) {
         }
 
         const botMsg = {
+          id: makeLocalMessageId(),
           text: replyText,
           sender: "bot",
           timestamp: new Date().toISOString(),
           processingTime:
             normalizedPayload.processing_time ?? payload.processing_time,
           ragas: normalizedPayload.ragas ?? payload.ragas,
+          status: "sent",
         };
 
         setChatHistory((p) =>
@@ -534,12 +605,8 @@ export default function Chat({ onLogout }) {
               c.id === activeChatId
                 ? {
                     ...c,
-                    messages: removeLastMatchingMessage(
-                      c.messages,
-                      (m) =>
-                        m?.sender === "user" &&
-                        m?.timestamp === userMsg.timestamp &&
-                        m?.text === userMsg.text,
+                    messages: toArray(c.messages).map((m) =>
+                      m?.id === userMsg.id ? { ...m, status: "failed" } : m,
                     ),
                   }
                 : c,
@@ -548,7 +615,7 @@ export default function Chat({ onLogout }) {
         }
         setInput((current) => current || userMsg.text);
         if (requestStartsNewChat) {
-          setPendingMessage(null);
+          setPendingMessage({ ...userMsg, status: "failed" });
         }
       } finally {
         setIsLoading(false);
@@ -681,12 +748,12 @@ export default function Chat({ onLogout }) {
 
   /* ================= RENDER ================= */
   return (
-    <div className="liquid-shell flex h-[100dvh] font-sans relative overflow-hidden">
+    <div className="liquid-shell chat-shell-height flex font-sans relative overflow-hidden">
       <div className="liquid-orb liquid-orb-a" />
       <div className="liquid-orb liquid-orb-b" />
       <div className="liquid-orb liquid-orb-c" />
-      {/* Mobile backdrop */}
-      {isMobile && !sidebarCollapsed && (
+      {/* Compact backdrop */}
+      {isCompactLayout && !sidebarCollapsed && (
         <div
           className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40"
           onClick={() => setSidebarCollapsed(true)}
@@ -697,7 +764,7 @@ export default function Chat({ onLogout }) {
       <aside
         className={`
         ${
-          isMobile
+          isCompactLayout
             ? `fixed top-0 left-0 h-full z-50 transform transition-transform duration-200 ease-out ${sidebarCollapsed ? "-translate-x-full" : "translate-x-0"} w-72`
             : `${sidebarCollapsed ? "w-16" : "w-72"} transition-[width] duration-200 ease-out`
         }
@@ -706,9 +773,9 @@ export default function Chat({ onLogout }) {
       >
         {/* Logo */}
         <div
-          className={`flex-shrink-0 mb-6 flex ${!isMobile && sidebarCollapsed ? "flex-col items-center gap-2" : "items-center justify-between"}`}
+          className={`flex-shrink-0 mb-6 flex ${!isCompactLayout && sidebarCollapsed ? "flex-col items-center gap-2" : "items-center justify-between"}`}
         >
-          {(isMobile || !sidebarCollapsed) && (
+          {(isCompactLayout || !sidebarCollapsed) && (
             <div className="flex items-center gap-3 px-1">
               <div className="bg-gradient-to-br from-blue-500 to-cyan-400 p-2 rounded-xl shadow-lg shadow-blue-500/25">
                 <Bot className="w-6 h-6 text-white" />
@@ -723,7 +790,7 @@ export default function Chat({ onLogout }) {
               </div>
             </div>
           )}
-          {!isMobile && sidebarCollapsed && (
+          {!isCompactLayout && sidebarCollapsed && (
             <div className="bg-gradient-to-br from-blue-500 to-cyan-400 p-2 rounded-xl shadow-lg shadow-blue-500/25">
               <Bot className="w-5 h-5 text-white" />
             </div>
@@ -732,7 +799,7 @@ export default function Chat({ onLogout }) {
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
             className="p-2 hover:bg-white/5 rounded-lg transition-all text-slate-400 hover:text-white"
           >
-            {isMobile ? (
+            {isCompactLayout ? (
               <X size={20} />
             ) : sidebarCollapsed ? (
               <PanelLeft size={20} />
@@ -745,14 +812,14 @@ export default function Chat({ onLogout }) {
         {/* New Chat */}
         <button
           onClick={handleNewChat}
-          className={`flex items-center justify-center gap-2 w-full p-3 mb-4 bg-gradient-to-r from-blue-500 to-cyan-500 text-white hover:from-blue-600 hover:to-cyan-600 rounded-xl transition-all text-sm font-semibold shadow-lg shadow-blue-500/20 ${!isMobile && sidebarCollapsed ? "px-0" : ""}`}
+          className={`flex items-center justify-center gap-2 w-full p-3 mb-4 bg-gradient-to-r from-blue-500 to-cyan-500 text-white hover:from-blue-600 hover:to-cyan-600 rounded-xl transition-all text-sm font-semibold shadow-lg shadow-blue-500/20 ${!isCompactLayout && sidebarCollapsed ? "px-0" : ""}`}
         >
           <Plus size={18} />
-          {(isMobile || !sidebarCollapsed) && "New Chat"}
+          {(isCompactLayout || !sidebarCollapsed) && "New Chat"}
         </button>
 
         {/* Search */}
-        {(isMobile || !sidebarCollapsed) && (
+        {(isCompactLayout || !sidebarCollapsed) && (
           <div className="relative mb-3">
             <Search
               size={14}
@@ -777,14 +844,14 @@ export default function Chat({ onLogout }) {
         )}
 
         {/* Label */}
-        {(isMobile || !sidebarCollapsed) && (
+        {(isCompactLayout || !sidebarCollapsed) && (
           <div className="px-2 mb-2 text-[10px] font-semibold text-slate-500 uppercase tracking-widest">
             {searchQuery ? `Results (${sortedChats.length})` : "Recent"}
           </div>
         )}
 
         {/* Chat list */}
-        {(isMobile || !sidebarCollapsed) && (
+        {(isCompactLayout || !sidebarCollapsed) && (
           <div className="flex-1 overflow-y-auto space-y-0.5 pr-1 sidebar-scroll">
             {sortedChats.map((chat) => (
               <div
@@ -793,7 +860,7 @@ export default function Chat({ onLogout }) {
                   setActiveChatId(chat.id);
                   setIsNewChat(false);
                   setPendingMessage(null);
-                  if (isMobile) setSidebarCollapsed(true);
+                  if (isCompactLayout) setSidebarCollapsed(true);
                 }}
                 className={`group relative w-full text-left px-3 py-2.5 rounded-lg flex items-center gap-3 cursor-pointer transition-all
                   ${chat.id === activeChatId ? "bg-white/10 text-white" : "text-slate-400 hover:bg-white/5 hover:text-slate-200"}`}
@@ -854,12 +921,12 @@ export default function Chat({ onLogout }) {
 
         {/* User profile */}
         <div
-          className={`mt-4 pt-4 border-t border-white/5 flex items-center gap-3 ${!isMobile && sidebarCollapsed ? "justify-center flex-col" : ""}`}
+          className={`mt-4 pt-4 border-t border-white/5 flex items-center gap-3 ${!isCompactLayout && sidebarCollapsed ? "justify-center flex-col" : ""}`}
         >
           <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500/30 to-cyan-400/30 flex items-center justify-center text-cyan-300 text-xs font-bold flex-shrink-0">
             {user.full_name ? user.full_name.charAt(0) : "U"}
           </div>
-          {(isMobile || !sidebarCollapsed) && (
+          {(isCompactLayout || !sidebarCollapsed) && (
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium text-slate-200 truncate">
                 {user.full_name || user.name}
@@ -868,10 +935,10 @@ export default function Chat({ onLogout }) {
           )}
           <button
             onClick={onLogout}
-            className={`flex items-center gap-1.5 text-slate-500 hover:text-red-400 px-2 py-1.5 rounded-lg transition-all text-sm ${!isMobile && sidebarCollapsed ? "mt-2" : ""}`}
+            className={`flex items-center gap-1.5 text-slate-500 hover:text-red-400 px-2 py-1.5 rounded-lg transition-all text-sm ${!isCompactLayout && sidebarCollapsed ? "mt-2" : ""}`}
           >
             <LogOut size={16} />
-            {(isMobile || !sidebarCollapsed) && <span>Logout</span>}
+            {(isCompactLayout || !sidebarCollapsed) && <span>Logout</span>}
           </button>
         </div>
       </aside>
@@ -881,7 +948,7 @@ export default function Chat({ onLogout }) {
         {/* Header */}
         <header className="h-12 glass border-b border-slate-200/40 flex items-center justify-between px-5 shrink-0 z-10">
           <div className="flex items-center gap-3">
-            {isMobile && (
+            {isCompactLayout && (
               <button
                 onClick={() => setSidebarCollapsed(false)}
                 className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-500"
@@ -900,9 +967,24 @@ export default function Chat({ onLogout }) {
         </header>
 
         {apiError && (
-          <div className="px-5 pt-3">
-            <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-              {apiError}
+          <div className="absolute left-0 right-0 top-14 z-30 px-3 sm:px-5 pointer-events-none">
+            <div className="max-w-3xl mx-auto rounded-xl border border-red-200 bg-red-50/95 px-3 py-2.5 shadow-lg pointer-events-auto">
+              <div className="flex items-start gap-2.5">
+                <AlertTriangle size={16} className="text-red-600 mt-0.5 shrink-0" />
+                <p className="text-sm text-red-700 flex-1">{apiError}</p>
+                <button
+                  type="button"
+                  onClick={handleRetryConnection}
+                  disabled={isRecovering}
+                  className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-white px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-100 disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  <RefreshCw
+                    size={12}
+                    className={isRecovering ? "animate-spin" : ""}
+                  />
+                  Retry
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -964,7 +1046,9 @@ export default function Chat({ onLogout }) {
         ) : (
           /* ---- MESSAGES + BOTTOM INPUT ---- */
           <>
-            <div className="flex-1 overflow-y-auto p-4 sm:p-6 scroll-smooth">
+            <div
+              className={`flex-1 overflow-y-auto p-4 sm:p-6 scroll-smooth ${apiError ? "pt-16 sm:pt-14" : ""}`}
+            >
               <div className="max-w-3xl mx-auto flex flex-col gap-5 pb-4">
                 {activeMessages.map((m, i) => {
                   const processingTime = Number(m?.processingTime);
@@ -972,7 +1056,7 @@ export default function Chat({ onLogout }) {
                     Number.isFinite(processingTime) && processingTime > 0;
                   return (
                     <div
-                      key={i}
+                      key={m?.id ?? i}
                       className={`flex ${m.sender === "user" ? "justify-end" : "items-start gap-3"} fade-in-up`}
                     >
                       {/* Bot avatar */}
@@ -985,10 +1069,12 @@ export default function Chat({ onLogout }) {
                         className={`flex flex-col ${m.sender === "user" ? "items-end" : "items-start flex-1 min-w-0"}`}
                       >
                         <div
-                          className={`max-w-[85%] px-4 py-3 rounded-2xl text-[14px] leading-relaxed break-words overflow-hidden
+                          className={`max-w-[92%] sm:max-w-[85%] px-4 py-3 rounded-2xl text-[14px] leading-relaxed break-words overflow-hidden
                           ${
                             m.sender === "user"
-                              ? "bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-br-md shadow-md shadow-blue-500/15"
+                              ? m.status === "failed"
+                                ? "bg-red-500 text-white rounded-br-md shadow-md shadow-red-500/20 border border-red-400/60"
+                                : "bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-br-md shadow-md shadow-blue-500/15"
                               : "bg-white text-slate-700 border border-slate-100 rounded-bl-md shadow-sm prose prose-sm max-w-none"
                           }`}
                           style={{ overflowWrap: "anywhere" }}
@@ -1045,6 +1131,11 @@ export default function Chat({ onLogout }) {
                             <CornerDownLeft size={12} />
                           </button>
                         </div>
+                        {m.sender === "user" && m.status === "failed" && (
+                          <span className="mt-1 text-[10px] text-red-500">
+                            Message failed to send. Edit and resend.
+                          </span>
+                        )}
                       </div>
                     </div>
                   );
@@ -1054,11 +1145,22 @@ export default function Chat({ onLogout }) {
                 {pendingMessage && !activeChat && (
                   <div className="flex justify-end fade-in-up">
                     <div
-                      className="max-w-[85%] px-4 py-3 rounded-2xl rounded-br-md bg-gradient-to-r from-blue-500 to-blue-600 text-white text-[14px] shadow-md shadow-blue-500/15 break-words"
+                      className={`max-w-[92%] sm:max-w-[85%] px-4 py-3 rounded-2xl rounded-br-md text-white text-[14px] shadow-md break-words ${
+                        pendingMessage.status === "failed"
+                          ? "bg-red-500 border border-red-400/60 shadow-red-500/20"
+                          : "bg-gradient-to-r from-blue-500 to-blue-600 shadow-blue-500/15"
+                      }`}
                       style={{ overflowWrap: "anywhere" }}
                     >
                       {pendingMessage.text}
                     </div>
+                  </div>
+                )}
+                {pendingMessage?.status === "failed" && !activeChat && (
+                  <div className="flex justify-end -mt-3">
+                    <span className="text-[10px] text-red-500">
+                      Message failed to send. Edit and resend.
+                    </span>
                   </div>
                 )}
 
@@ -1083,7 +1185,7 @@ export default function Chat({ onLogout }) {
             </div>
 
             {/* Bottom Input */}
-            <div className="p-3 glass border-t border-slate-200/40 shrink-0">
+            <div className="p-3 glass border-t border-slate-200/40 shrink-0 chat-composer-safe">
               {renderInputBar(false)}
               <p className="text-center text-[10px] text-slate-400 mt-2">
                 Panya may make mistakes. Verify important information.

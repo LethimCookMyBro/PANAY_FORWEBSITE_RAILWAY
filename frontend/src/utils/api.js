@@ -7,6 +7,7 @@ import axios from "axios";
 
 const API_URL = import.meta.env.VITE_API_URL || "";
 const API_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS || 180000);
+const RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504]);
 
 const looksLikeHtml = (value) => {
   if (typeof value !== "string") return false;
@@ -20,8 +21,71 @@ const looksLikeHtml = (value) => {
 };
 
 const isApiUrl = (url = "") => /^\/?api(\/|$)/.test(url) || url.includes("/api/");
+const getHttpStatus = (error) => {
+  const status = Number(error?.response?.status);
+  return Number.isFinite(status) ? status : null;
+};
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export const isRetryableApiError = (error) => {
+  const status = getHttpStatus(error);
+  if (status != null) {
+    return RETRYABLE_STATUS_CODES.has(status);
+  }
+
+  const normalizedCode = String(error?.code || "").toUpperCase();
+  if (
+    normalizedCode === "ECONNABORTED" ||
+    normalizedCode === "ERR_NETWORK" ||
+    normalizedCode === "ERR_BAD_RESPONSE"
+  ) {
+    return true;
+  }
+
+  const normalizedMessage = String(error?.message || "").toLowerCase();
+  return (
+    normalizedMessage.includes("network error") ||
+    normalizedMessage.includes("timed out")
+  );
+};
+
+export const retryApiRequest = async (requestFn, options = {}) => {
+  const retries = Number.isInteger(options?.retries)
+    ? Math.max(0, options.retries)
+    : 1;
+  const baseDelayMs =
+    Number(options?.baseDelayMs) > 0 ? Number(options.baseDelayMs) : 450;
+  const shouldRetry = options?.shouldRetry || isRetryableApiError;
+
+  let lastError;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      return await requestFn();
+    } catch (error) {
+      lastError = error;
+      if (attempt >= retries || !shouldRetry(error)) {
+        throw error;
+      }
+      await sleep(baseDelayMs * (attempt + 1));
+    }
+  }
+
+  throw lastError;
+};
 
 export const getApiErrorMessage = (error, fallback = "Request failed") => {
+  const status = getHttpStatus(error);
+  if (status === 504) {
+    return "Server timeout (504). The backend took too long to respond. Please retry in a few moments.";
+  }
+  if (status === 503) {
+    return "Service unavailable (503). Backend may still be starting up.";
+  }
+  if (status === 502) {
+    return "Bad gateway (502). Frontend proxy cannot reach backend service.";
+  }
+
   const data = error?.response?.data;
 
   if (typeof data === "string" && data.trim()) {
