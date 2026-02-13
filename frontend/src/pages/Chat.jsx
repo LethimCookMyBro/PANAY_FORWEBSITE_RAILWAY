@@ -299,7 +299,7 @@ export default function Chat({ onLogout }) {
   const [apiError, setApiError] = useState("");
   const [isRecovering, setIsRecovering] = useState(false);
 
-  const chatEndRef = useRef(null);
+  const messagesContainerRef = useRef(null);
   const inputRef = useRef(null);
   const compactModeRef = useRef(null);
 
@@ -448,6 +448,31 @@ export default function Chat({ onLogout }) {
   useEffect(() => {
     resizeComposer();
   }, [input, resizeComposer, hasMessages]);
+
+  const scrollMessagesToBottom = useCallback((behavior = "smooth") => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    if (typeof container.scrollTo === "function") {
+      container.scrollTo({ top: container.scrollHeight, behavior });
+      return;
+    }
+    container.scrollTop = container.scrollHeight;
+  }, []);
+
+  useEffect(() => {
+    if (!hasMessages) return;
+    const rafId = window.requestAnimationFrame(() => {
+      scrollMessagesToBottom(isLoading ? "smooth" : "auto");
+    });
+    return () => window.cancelAnimationFrame(rafId);
+  }, [
+    activeChatId,
+    activeMessages.length,
+    hasMessages,
+    isLoading,
+    pendingMessage,
+    scrollMessagesToBottom,
+  ]);
 
   /* ---- handlers ---- */
   const handleNewChat = () => {
@@ -619,13 +644,10 @@ export default function Chat({ onLogout }) {
         }
       } finally {
         setIsLoading(false);
-        setTimeout(
-          () => chatEndRef.current?.scrollIntoView({ behavior: "smooth" }),
-          100,
-        );
+        setTimeout(() => scrollMessagesToBottom("smooth"), 100);
       }
     },
-    [input, isLoading, activeChatId, isNewChat],
+    [input, isLoading, activeChatId, isNewChat, scrollMessagesToBottom],
   );
 
   const handleComposerKeyDown = useCallback(
@@ -1047,6 +1069,7 @@ export default function Chat({ onLogout }) {
           /* ---- MESSAGES + BOTTOM INPUT ---- */
           <>
             <div
+              ref={messagesContainerRef}
               className={`flex-1 overflow-y-auto p-4 sm:p-6 scroll-smooth ${apiError ? "pt-16 sm:pt-14" : ""}`}
             >
               <div className="max-w-3xl mx-auto flex flex-col gap-5 pb-4">
@@ -1180,7 +1203,6 @@ export default function Chat({ onLogout }) {
                   </div>
                 )}
 
-                <div ref={chatEndRef} />
               </div>
             </div>
 

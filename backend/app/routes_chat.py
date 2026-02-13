@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import Any, Dict, Optional
 
-from app.chatbot import answer_question
+from app.chatbot import answer_question, invoke_llm_with_fallback
 from app.routes_auth import get_current_user
 from app.chat_db import (
     create_chat_session,
@@ -85,7 +85,7 @@ def _answer_direct_llm(llm, message: str, chat_history: list) -> str:
         + f"User question: {message}\n\n"
         + "Answer:"
     )
-    return str(llm.invoke(prompt)).strip()
+    return invoke_llm_with_fallback(llm, prompt)
 
 
 # =========================
@@ -210,16 +210,38 @@ def chat(
                 "metadata": {"error": "timeout"},
             }
         except Exception as e:
-            logger.error("Chat generation failed: %s", e, exc_info=True)
-            result = {
-                "reply": _build_service_error_reply(str(e)),
-                "processing_time": 0.0,
-                "ragas": None,
-                "retrieval_time": 0.0,
-                "context_count": 0,
-                "max_score": None,
-                "metadata": {"error": "generation_failed", "detail": str(e)},
-            }
+            detail = str(e)
+            logger.error("Chat generation failed: %s", detail, exc_info=True)
+            normalized = detail.lower()
+            if "405" in normalized and "method not allowed" in normalized:
+                result = {
+                    "reply": (
+                        "The AI model endpoint rejected this request method (405).\n\n"
+                        "Please verify model provider settings:\n"
+                        "1. OLLAMA_BASE_URL points to an Ollama-compatible endpoint\n"
+                        "2. The target service supports chat/generate APIs\n"
+                        "3. Retry after updating configuration"
+                    ),
+                    "processing_time": 0.0,
+                    "ragas": None,
+                    "retrieval_time": 0.0,
+                    "context_count": 0,
+                    "max_score": None,
+                    "metadata": {
+                        "error": "llm_method_not_allowed",
+                        "detail": detail,
+                    },
+                }
+            else:
+                result = {
+                    "reply": _build_service_error_reply(detail),
+                    "processing_time": 0.0,
+                    "ragas": None,
+                    "retrieval_time": 0.0,
+                    "context_count": 0,
+                    "max_score": None,
+                    "metadata": {"error": "generation_failed", "detail": detail},
+                }
 
     result = _coerce_answer_result(result)
     if not str(result.get("reply", "")).strip():

@@ -2,14 +2,13 @@
 # VERSION 5.0 - PURE RAG (NO DB SIDE EFFECTS)
 
 from langchain_core.prompts import PromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
 from typing import List, Optional, Dict, Any
 import math
 import logging
 import re
 import time
 import os
+import requests
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -61,6 +60,89 @@ def _env_bool(key: str, default: bool = False) -> bool:
     if val is None:
         return default
     return str(val).strip().lower() in ("1", "true", "yes", "y", "on")
+
+
+def _is_method_not_allowed_error(exc: Exception) -> bool:
+    msg = str(exc or "").lower()
+    return "405" in msg and "method not allowed" in msg
+
+
+def _extract_llm_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    content = getattr(value, "content", None)
+    if isinstance(content, str):
+        return content
+    if isinstance(value, dict):
+        for key in ("response", "reply", "content", "text"):
+            candidate = value.get(key)
+            if isinstance(candidate, str):
+                return candidate
+    return str(value)
+
+
+def _invoke_ollama_chat_fallback(prompt: str) -> str:
+    base_url = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434").rstrip("/")
+    model = os.getenv("OLLAMA_MODEL", "llama3.2")
+    timeout = int(os.getenv("LLM_TIMEOUT", "180"))
+    num_predict = int(os.getenv("LLM_NUM_PREDICT", "1024"))
+    temperature = float(os.getenv("LLM_TEMPERATURE", "0.7"))
+
+    response = requests.post(
+        f"{base_url}/api/chat",
+        json={
+            "model": model,
+            "stream": False,
+            "messages": [{"role": "user", "content": prompt}],
+            "options": {
+                "temperature": temperature,
+                "num_predict": num_predict,
+            },
+        },
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    payload = response.json() if response.content else {}
+
+    message_content = (
+        (payload.get("message") or {}).get("content")
+        if isinstance(payload, dict)
+        else None
+    )
+    if isinstance(message_content, str) and message_content.strip():
+        return message_content.strip()
+
+    choices = payload.get("choices") if isinstance(payload, dict) else None
+    if isinstance(choices, list) and choices:
+        first_choice = choices[0] if isinstance(choices[0], dict) else {}
+        choice_text = (
+            ((first_choice.get("message") or {}).get("content"))
+            or first_choice.get("text")
+            or first_choice.get("response")
+        )
+        if isinstance(choice_text, str) and choice_text.strip():
+            return choice_text.strip()
+
+    fallback = payload.get("response") if isinstance(payload, dict) else None
+    if isinstance(fallback, str) and fallback.strip():
+        return fallback.strip()
+
+    raise RuntimeError("LLM fallback response missing content")
+
+
+def invoke_llm_with_fallback(llm: Any, prompt: str) -> str:
+    try:
+        raw = llm.invoke(prompt)
+        return _extract_llm_text(raw).strip()
+    except Exception as exc:
+        if not _is_method_not_allowed_error(exc):
+            raise
+        logger.warning(
+            "LLM invoke failed with 405. Falling back to Ollama /api/chat endpoint."
+        )
+        return _invoke_ollama_chat_fallback(prompt)
 
 
 # ============================================================
@@ -475,33 +557,26 @@ def answer_question(
         context_str = "\n\n---\n\n".join(
             f"[Source: {src}]\n{c}" for src, c in zip(context_sources, context_texts)
         )
-        chain = (
-            {
-                "history_section": (lambda _: history_section),
-                "context": (lambda _: context_str),
-                "question": RunnablePassthrough()
-            }
-            | build_enhanced_prompt()
-            | llm
-            | StrOutputParser()
-        )
+        prompt_template = build_enhanced_prompt()
+        prompt_inputs = {
+            "history_section": history_section,
+            "context": context_str,
+            "question": processed_msg,
+        }
     else:
-        chain = (
-            {
-                "history_section": (lambda _: history_section),
-                "question": RunnablePassthrough()
-            }
-            | build_no_context_prompt()
-            | llm
-            | StrOutputParser()
-        )
+        prompt_template = build_no_context_prompt()
+        prompt_inputs = {
+            "history_section": history_section,
+            "question": processed_msg,
+        }
+    rendered_prompt = prompt_template.format(**prompt_inputs)
 
     # LLM call with retry logic (exponential backoff)
     max_retries = 3
     reply = None
     for attempt in range(max_retries):
         try:
-            reply = chain.invoke(processed_msg)
+            reply = invoke_llm_with_fallback(llm, rendered_prompt)
             break  # Success, exit retry loop
         except Exception as e:
             if attempt < max_retries - 1:
