@@ -37,6 +37,7 @@ import math
 import re
 import json
 import io
+import threading
 from uuid import uuid4
 import mimetypes
 import warnings
@@ -355,8 +356,8 @@ def wait_for_ollama(max_attempts: int = 30, delay: float = 2.0) -> bool:
     return False
 
 
-def ensure_model(model_name: str) -> bool:
-    """Ensure the required LLM model is available, pulling if necessary"""
+def ensure_model(model_name: str, allow_pull: bool = False) -> bool:
+    """Ensure the required LLM model is available; optionally pull when missing."""
     try:
         logger.info(f"🔄 Checking for model: '{model_name}'")
         
@@ -372,6 +373,13 @@ def ensure_model(model_name: str) -> bool:
         if model_name in available_names or base_name in available_base:
             logger.info(f"✅ Model '{model_name}' is available")
             return True
+
+        if not allow_pull:
+            logger.warning(
+                "⚠️ Model '%s' is missing. Skipping startup pull (set OLLAMA_PULL_ON_START=true to enable).",
+                model_name,
+            )
+            return False
         
         logger.warning(f"⚠️ Model '{model_name}' not found, pulling...")
         pull_response = requests.post(
@@ -421,6 +429,51 @@ def test_database_connection(db_pool) -> bool:
     finally:
         if conn is not None:
             db_pool.putconn(conn)
+
+
+def run_background_startup_tasks(app: FastAPI) -> None:
+    """Load heavy optional services without blocking API startup."""
+    try:
+        app.state.embedder = None
+        try:
+            app.state.embedder = get_embedder()
+            logger.info(f"✅ Embedder loaded: {config.EMBED_MODEL_NAME}")
+        except Exception as e:
+            logger.error(f"🔥 Failed to load embedder: {e}")
+            return
+
+        if should_auto_embed_knowledge():
+            try:
+                auto_embed_result = auto_embed_knowledge_if_empty(
+                    db_pool=app.state.db_pool,
+                    embedder=app.state.embedder,
+                    collection=config.DEFAULT_COLLECTION,
+                    knowledge_dir=get_auto_embed_knowledge_dir(),
+                    batch_size=get_auto_embed_batch_size(),
+                    chunk_size=get_auto_embed_chunk_size(),
+                    chunk_overlap=get_auto_embed_chunk_overlap(),
+                    sync_if_not_empty=True,
+                    skip_known_sources=not should_auto_embed_force_rescan(),
+                )
+                logger.info("📚 Knowledge auto-embed result: %s", auto_embed_result)
+            except Exception as e:
+                logger.error(f"🔥 Knowledge auto-embed failed: {e}", exc_info=True)
+
+        if should_auto_seed():
+            try:
+                seed_result = seed_golden_qa_if_empty(
+                    db_pool=app.state.db_pool,
+                    embedder=app.state.embedder,
+                    collection=config.DEFAULT_COLLECTION,
+                    json_path=get_default_golden_qa_path(
+                        (os.getenv("GOLDEN_QA_PATH", "") or "").strip()
+                    ),
+                )
+                logger.info(f"🌱 Golden QA seed result: {seed_result}")
+            except Exception as e:
+                logger.error(f"🔥 Golden QA auto-seed failed: {e}", exc_info=True)
+    except Exception as e:
+        logger.error("🔥 Background startup tasks failed: %s", e, exc_info=True)
 
 
 # ============================================================================
@@ -653,9 +706,30 @@ async def lifespan(app: FastAPI):
         logger.error(f"🔥 Failed to initialize DB/migrations: {e}", exc_info=True)
         raise RuntimeError("Backend startup aborted due to database initialization error") from e
     
-    # Initialize LLM
+    # Initialize LLM (best-effort; do not block API startup for long waits/pulls)
     app.state.llm = None
-    if wait_for_ollama() and ensure_model(config.OLLAMA_MODEL):
+    set_llm(None)
+
+    try:
+        ollama_attempts = int(os.getenv("OLLAMA_STARTUP_MAX_ATTEMPTS", "3"))
+    except ValueError:
+        ollama_attempts = 3
+    ollama_attempts = max(1, ollama_attempts)
+
+    try:
+        ollama_delay = float(os.getenv("OLLAMA_STARTUP_DELAY_SECONDS", "1.5"))
+    except ValueError:
+        ollama_delay = 1.5
+    ollama_delay = max(0.1, ollama_delay)
+
+    allow_model_pull = to_bool(os.getenv("OLLAMA_PULL_ON_START"))
+    if allow_model_pull is None:
+        allow_model_pull = False
+
+    if wait_for_ollama(max_attempts=ollama_attempts, delay=ollama_delay) and ensure_model(
+        config.OLLAMA_MODEL,
+        allow_pull=allow_model_pull,
+    ):
         try:
             app.state.llm = OllamaLLM(
                 model=config.OLLAMA_MODEL,
@@ -668,47 +742,29 @@ async def lifespan(app: FastAPI):
             logger.info(f"✅ LLM loaded: {config.OLLAMA_MODEL} (max {config.LLM_NUM_PREDICT} tokens)")
         except Exception as e:
             logger.error(f"🔥 Failed to load LLM: {e}")
-    
-    # Initialize embedder (use singleton from embed_logic)
+    else:
+        logger.warning(
+            "⚠️ LLM not ready at startup. API will still run; chat generation may use fallback until Ollama is available.",
+        )
+
+    # Load embedder + optional auto-embed/seed without blocking startup.
     app.state.embedder = None
-    try:
-        app.state.embedder = get_embedder()
-        logger.info(f"✅ Embedder loaded: {config.EMBED_MODEL_NAME}")
-    except Exception as e:
-        logger.error(f"🔥 Failed to load embedder: {e}")
+    bootstrap_in_background = to_bool(os.getenv("BACKGROUND_BOOTSTRAP_ON_START"))
+    if bootstrap_in_background is None:
+        bootstrap_in_background = True
 
-    # Optional bootstrap embedding so fresh deployments can answer from bundled docs.
-    if should_auto_embed_knowledge() and app.state.embedder is not None:
-        try:
-            auto_embed_result = auto_embed_knowledge_if_empty(
-                db_pool=app.state.db_pool,
-                embedder=app.state.embedder,
-                collection=config.DEFAULT_COLLECTION,
-                knowledge_dir=get_auto_embed_knowledge_dir(),
-                batch_size=get_auto_embed_batch_size(),
-                chunk_size=get_auto_embed_chunk_size(),
-                chunk_overlap=get_auto_embed_chunk_overlap(),
-                sync_if_not_empty=True,
-                skip_known_sources=not should_auto_embed_force_rescan(),
-            )
-            logger.info("📚 Knowledge auto-embed result: %s", auto_embed_result)
-        except Exception as e:
-            logger.error(f"🔥 Knowledge auto-embed failed: {e}", exc_info=True)
-
-    # Optional fallback seed from golden_qa.json.
-    if should_auto_seed() and app.state.embedder is not None:
-        try:
-            seed_result = seed_golden_qa_if_empty(
-                db_pool=app.state.db_pool,
-                embedder=app.state.embedder,
-                collection=config.DEFAULT_COLLECTION,
-                json_path=get_default_golden_qa_path(
-                    (os.getenv("GOLDEN_QA_PATH", "") or "").strip()
-                ),
-            )
-            logger.info(f"🌱 Golden QA seed result: {seed_result}")
-        except Exception as e:
-            logger.error(f"🔥 Golden QA auto-seed failed: {e}", exc_info=True)
+    if bootstrap_in_background:
+        bootstrap_thread = threading.Thread(
+            target=run_background_startup_tasks,
+            args=(app,),
+            name="startup-bootstrap",
+            daemon=True,
+        )
+        bootstrap_thread.start()
+        app.state.bootstrap_thread = bootstrap_thread
+        logger.info("🧵 Background bootstrap started (embedder/auto-embed/seed)")
+    else:
+        run_background_startup_tasks(app)
     
     logger.info("🎉 Application startup complete")
     
