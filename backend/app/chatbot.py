@@ -63,6 +63,16 @@ def _env_bool(key: str, default: bool = False) -> bool:
     return str(val).strip().lower() in ("1", "true", "yes", "y", "on")
 
 
+def _env_int(key: str, default: int) -> int:
+    raw = os.getenv(key)
+    if raw is None:
+        return default
+    try:
+        return int(str(raw).strip())
+    except Exception:
+        return default
+
+
 def _normalize_ollama_base_url(raw_url: str) -> str:
     value = (raw_url or "").strip()
     if not value:
@@ -106,7 +116,7 @@ def _invoke_ollama_chat_fallback(prompt: str) -> str:
         os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
     ).rstrip("/")
     model = os.getenv("OLLAMA_MODEL", "llama3.2")
-    timeout = int(os.getenv("LLM_TIMEOUT", "180"))
+    timeout = _env_int("LLM_TIMEOUT", 20)
     num_predict = int(os.getenv("LLM_NUM_PREDICT", "1024"))
     temperature = float(os.getenv("LLM_TEMPERATURE", "0.7"))
 
@@ -698,7 +708,7 @@ def answer_question(
     rendered_prompt = prompt_template.format(**prompt_inputs)
 
     # LLM call with retry logic (exponential backoff)
-    max_retries = 3
+    max_retries = max(1, _env_int("LLM_MAX_RETRIES", 1))
     reply = None
     for attempt in range(max_retries):
         try:
@@ -729,7 +739,7 @@ def answer_question(
 
     # ============ RAGAS EVALUATION ============
     ragas_scores = None
-    enable_chat_ragas = _env_bool("ENABLE_CHAT_RAGAS", True)
+    enable_chat_ragas = _env_bool("ENABLE_CHAT_RAGAS", False)
     allow_source_citations = True
 
     if enable_chat_ragas and context_texts:

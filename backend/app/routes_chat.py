@@ -1,7 +1,9 @@
 import logging
+import os
 import requests
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from typing import Any, Dict, Optional
 
@@ -28,6 +30,57 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 logger = logging.getLogger(__name__)
 
 
+def _env_bool(key: str, default: bool = False) -> bool:
+    value = os.getenv(key)
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _env_int(key: str, default: int) -> int:
+    value = os.getenv(key)
+    if value is None:
+        return default
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return default
+
+
+def _env_float(key: str, default: float) -> float:
+    value = os.getenv(key)
+    if value is None:
+        return default
+    try:
+        return float(str(value).strip())
+    except Exception:
+        return default
+
+
+CHAT_EXECUTOR = ThreadPoolExecutor(
+    max_workers=max(1, _env_int("CHAT_EXECUTOR_WORKERS", 4)),
+    thread_name_prefix="chat-worker",
+)
+
+
+def _get_request_embedder(request: Request):
+    embedder = getattr(request.app.state, "embedder", None)
+    if embedder is not None:
+        return embedder
+
+    if not _env_bool("LOAD_EMBEDDER_ON_DEMAND", False):
+        return None
+
+    try:
+        loaded = get_embedder()
+        request.app.state.embedder = loaded
+        logger.info("Embedder loaded on-demand from chat route")
+        return loaded
+    except Exception as e:
+        logger.warning("Embedder unavailable, will use direct LLM fallback: %s", e)
+        return None
+
+
 def _build_llm_unavailable_reply() -> str:
     return (
         "The AI model service is not ready yet, so I can't answer right now.\n\n"
@@ -51,10 +104,15 @@ def _build_connection_error_reply() -> str:
         "Please check if the Ollama service is running and accessible at the configured URL."
     )
 
-def _build_timeout_error_reply() -> str:
+def _build_timeout_error_reply(timeout_s: Optional[float] = None) -> str:
+    if timeout_s is None:
+        return (
+            "The AI service timed out while generating the answer.\n\n"
+            "The model might be loading or the query is too complex. Please try again."
+        )
     return (
-        "The AI service timed out while generating the answer.\n\n"
-        "The model might be loading or the query is too complex. Please try again."
+        f"The request exceeded the server response budget ({timeout_s:.1f}s), so I stopped generation to keep the API responsive.\n\n"
+        "Please retry, ask a shorter/more specific question, or reduce model load."
     )
 
 
@@ -88,6 +146,37 @@ def _answer_direct_llm(llm, message: str, chat_history: list) -> str:
     return invoke_llm_with_fallback(llm, prompt)
 
 
+def _run_chat_generation(
+    db_pool,
+    llm,
+    embedder,
+    message: str,
+    collection: str,
+    chat_history: list,
+) -> Dict[str, Any]:
+    if embedder is not None:
+        return answer_question(
+            question=message,
+            db_pool=db_pool,
+            llm=llm,
+            embedder=embedder,
+            collection=collection,
+            retriever_class=PostgresVectorRetriever,
+            reranker_class=EnhancedFlashrankRerankRetriever,
+            chat_history=chat_history,
+        )
+
+    reply = _answer_direct_llm(llm, message, chat_history)
+    return {
+        "reply": reply,
+        "processing_time": 0.0,
+        "ragas": None,
+        "retrieval_time": 0.0,
+        "context_count": 0,
+        "max_score": None,
+    }
+
+
 # =========================
 # Schemas
 # =========================
@@ -111,6 +200,7 @@ class UpdateSessionRequest(BaseModel):
 
 @router.post("")
 def chat(
+    request: Request,
     payload: ChatRequest,
     current_user: dict = Depends(get_current_user),
 ):
@@ -120,11 +210,8 @@ def chat(
         raise HTTPException(status_code=400, detail="Message cannot be empty")
 
     llm = get_llm()
-    embedder = None
-    try:
-        embedder = get_embedder()
-    except Exception as e:
-        logger.warning("Embedder unavailable, will use direct LLM fallback: %s", e)
+    embedder = _get_request_embedder(request)
+    request_budget_seconds = max(5.0, _env_float("CHAT_REQUEST_TIMEOUT_SECONDS", 24.0))
 
     # 1) Create session if not provided
     if payload.session_id is None:
@@ -165,28 +252,38 @@ def chat(
             "metadata": {"error": "llm_unavailable"},
         }
     else:
+        future = None
         try:
-            if embedder is not None:
-                result = answer_question(
-                    question=message,
-                    db_pool=db_pool,
-                    llm=llm,
-                    embedder=embedder,
-                    collection=payload.collection,
-                    retriever_class=PostgresVectorRetriever,
-                    reranker_class=EnhancedFlashrankRerankRetriever,
-                    chat_history=chat_history,  # Pass conversation history
-                )
-            else:
-                reply = _answer_direct_llm(llm, message, chat_history)
-                result = {
-                    "reply": reply,
-                    "processing_time": 0.0,
-                    "ragas": None,
-                    "retrieval_time": 0.0,
-                    "context_count": 0,
-                    "max_score": None,
-                }
+            future = CHAT_EXECUTOR.submit(
+                _run_chat_generation,
+                db_pool,
+                llm,
+                embedder,
+                message,
+                payload.collection,
+                chat_history,
+            )
+            result = future.result(timeout=request_budget_seconds)
+        except FutureTimeoutError:
+            if future is not None:
+                future.cancel()
+            logger.error(
+                "Chat generation exceeded request budget (%.1fs) for session %s",
+                request_budget_seconds,
+                session_id,
+            )
+            result = {
+                "reply": _build_timeout_error_reply(timeout_s=request_budget_seconds),
+                "processing_time": request_budget_seconds,
+                "ragas": None,
+                "retrieval_time": 0.0,
+                "context_count": 0,
+                "max_score": None,
+                "metadata": {
+                    "error": "request_timeout",
+                    "timeout_seconds": request_budget_seconds,
+                },
+            }
         except requests.exceptions.ConnectionError:
             logger.error("Chat generation failed: Connection refused to AI service")
             result = {

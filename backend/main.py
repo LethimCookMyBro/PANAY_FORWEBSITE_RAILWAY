@@ -135,7 +135,7 @@ class Config:
         os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
     )
     LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.7"))
-    LLM_TIMEOUT: int = int(os.getenv("LLM_TIMEOUT", "180"))
+    LLM_TIMEOUT: int = int(os.getenv("LLM_TIMEOUT", "20"))
     LLM_NUM_PREDICT: int = int(os.getenv("LLM_NUM_PREDICT", "1024"))  # Max output tokens
     
     # Embeddings

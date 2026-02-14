@@ -11,8 +11,8 @@ const rawApiTarget =
   process.env.BACKEND_API_URL ||
   "";
 const apiTarget = rawApiTarget || "http://localhost:5000";
-const proxyTimeoutMs = Number(process.env.API_PROXY_TIMEOUT_MS || 30000);
-const proxySocketTimeoutMs = Number(process.env.API_SOCKET_TIMEOUT_MS || 30000);
+const proxyTimeoutMs = Number(process.env.API_PROXY_TIMEOUT_MS || 180000);
+const proxySocketTimeoutMs = Number(process.env.API_SOCKET_TIMEOUT_MS || 180000);
 
 const isPlaceholder = (value) => {
   const text = String(value || "").trim();
@@ -88,8 +88,8 @@ app.use(
     changeOrigin: true,
     secure: false,
     xfwd: true,
-    proxyTimeout: Number.isFinite(proxyTimeoutMs) ? proxyTimeoutMs : 30000,
-    timeout: Number.isFinite(proxySocketTimeoutMs) ? proxySocketTimeoutMs : 30000,
+    proxyTimeout: Number.isFinite(proxyTimeoutMs) ? proxyTimeoutMs : 180000,
+    timeout: Number.isFinite(proxySocketTimeoutMs) ? proxySocketTimeoutMs : 180000,
     logger: console,
     on: {
       error(err, req, res) {
