@@ -73,6 +73,7 @@ from app.seed import (
     get_default_golden_qa_path,
     seed_golden_qa_if_empty,
     should_auto_embed_force_rescan,
+    should_auto_embed_sync_if_not_empty,
     should_auto_embed_knowledge,
     should_auto_seed,
 )
@@ -452,7 +453,7 @@ def run_background_startup_tasks(app: FastAPI) -> None:
                     batch_size=get_auto_embed_batch_size(),
                     chunk_size=get_auto_embed_chunk_size(),
                     chunk_overlap=get_auto_embed_chunk_overlap(),
-                    sync_if_not_empty=True,
+                    sync_if_not_empty=should_auto_embed_sync_if_not_empty(),
                     skip_known_sources=not should_auto_embed_force_rescan(),
                 )
                 logger.info("📚 Knowledge auto-embed result: %s", auto_embed_result)

@@ -266,11 +266,21 @@ def should_auto_seed() -> bool:
 
 
 def should_auto_embed_knowledge() -> bool:
-    return _as_bool(os.getenv("AUTO_EMBED_KNOWLEDGE", "true"), default=True)
+    raw = os.getenv("AUTO_EMBED_KNOWLEDGE")
+    if raw is None:
+        # Safe default: avoid heavy startup ingestion on production unless explicitly enabled.
+        app_env = (os.getenv("APP_ENV", "development") or "development").strip().lower()
+        return app_env != "production"
+    return _as_bool(raw, default=False)
 
 
 def should_auto_embed_force_rescan() -> bool:
     return _as_bool(os.getenv("AUTO_EMBED_FORCE_RESCAN", "false"), default=False)
+
+
+def should_auto_embed_sync_if_not_empty() -> bool:
+    # Default false: if collection already has data, skip expensive resync pass.
+    return _as_bool(os.getenv("AUTO_EMBED_SYNC_IF_NOT_EMPTY", "false"), default=False)
 
 
 def auto_embed_knowledge_if_empty(

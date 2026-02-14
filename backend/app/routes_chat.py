@@ -23,6 +23,7 @@ from app.embed_logic import get_embedder
 from app.retriever import (
     PostgresVectorRetriever,
     EnhancedFlashrankRerankRetriever,
+    NoRerankRetriever,
 )
 from app.utils import get_llm
 
@@ -154,6 +155,9 @@ def _run_chat_generation(
     collection: str,
     chat_history: list,
 ) -> Dict[str, Any]:
+    use_rerank = _env_bool("CHAT_USE_RERANK", False)
+    reranker_cls = EnhancedFlashrankRerankRetriever if use_rerank else NoRerankRetriever
+
     if embedder is not None:
         return answer_question(
             question=message,
@@ -162,7 +166,7 @@ def _run_chat_generation(
             embedder=embedder,
             collection=collection,
             retriever_class=PostgresVectorRetriever,
-            reranker_class=EnhancedFlashrankRerankRetriever,
+            reranker_class=reranker_cls,
             chat_history=chat_history,
         )
 
