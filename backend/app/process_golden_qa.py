@@ -59,7 +59,7 @@ def setup_dependencies():
     # Setup embedder
     embedder = SentenceTransformer(
         EMBED_MODEL_NAME,
-        cache_folder='/app/models'
+        cache_folder=os.getenv("MODEL_CACHE", "/data/models")
     )
     
     return db_pool, llm, embedder

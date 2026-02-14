@@ -1,270 +1,887 @@
 """
-Batch embedding CLI script for documents.
-Uses embed_logic.py for chunking/filtering logic.
+Incremental embedding CLI for PDF/JSON knowledge files.
 
-Usage (run from host via docker compose exec):
-    # From Git Bash/MINGW on Windows, use // to prevent path mangling:
-    docker compose exec backend python embed.py /data/PLCTEST
+Default behavior:
+- Manual command mode
+- Checksum-based skip/re-embed
+- Persistent ingest state on disk (supports Railway volume)
 
-    # From PowerShell/CMD on Windows or Linux/Mac:
-    docker compose exec backend python embed.py /data/PLCTEST
-
-    # Dry-run (preview without embedding)
-    docker compose exec backend python embed.py /data/PLCTEST --dry-run
-
-    # Custom chunk settings
-    docker compose exec backend python embed.py /data/PLCTEST --chunk-size 500 --chunk-overlap 100
-
-    # Custom collection & smaller batches (for low VRAM)
-    docker compose exec backend python embed.py /data/PLCTEST --collection my_docs --batch-size 500
+Examples:
+    python /app/backend/embed.py /data/Knowledge \
+      --collection plcnext \
+      --knowledge-root /data/Knowledge \
+      --state-path /data/ingest/state.json \
+      --skip-mode checksum \
+      --bootstrap-from-db \
+      --replace-updated
 """
-import os
-import glob
+
 import argparse
-import logging
+import gc
+import glob
 import hashlib
 import json
-import gc
-from typing import List
+import logging
+import os
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-# Force Docling to use CPU if EMBED_USE_CPU is set (prevents OOM on 8GB GPUs)
-if os.getenv("EMBED_USE_CPU", "false").lower() in ("true", "1", "yes"):
+# Force Docling to use CPU if EMBED_USE_CPU is set (prevents OOM on small GPU instances)
+FORCE_EMBED_CPU = os.getenv("EMBED_USE_CPU", "false").strip().lower() in {"1", "true", "yes", "on"}
+if FORCE_EMBED_CPU:
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
     os.environ["DOCLING_DEVICE"] = "cpu"
-    print("🔧 Forcing CPU mode for Docling (EMBED_USE_CPU=true)")
+    print("[embed] forcing Docling CPU mode (EMBED_USE_CPU=true)")
 
 from dotenv import load_dotenv
+from langchain_core.documents import Document
 from langchain_docling import DoclingLoader
 from langchain_docling.loader import ExportType
-from sentence_transformers import SentenceTransformer
-from langchain_core.documents import Document
-import psycopg2
 from psycopg2.extras import execute_values
+from sentence_transformers import SentenceTransformer
+import psycopg2
 import torch
 from tqdm import tqdm
 
-# Import all chunking/filtering logic from embed_logic
 from app.embed_logic import (
+    create_json_qa_chunks,
     create_pdf_chunks,
-    create_json_qa_chunks, 
     get_embedding_instruction,
 )
+from app.env_resolver import redact_database_url, resolve_database_url
+from app.ingest_state import (
+    bootstrap_state_from_db,
+    build_lock_path,
+    load_state,
+    save_state,
+    with_lock,
+)
 
-# ==== Load config ====
+
+# ==== Config ==== 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-DB_URL = os.getenv("DATABASE_URL")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "BAAI/bge-m3")
+DEFAULT_COLLECTION = os.getenv("DEFAULT_COLLECTION", "plcnext")
+DEFAULT_KNOWLEDGE_DIR = os.getenv("KNOWLEDGE_DIR", "/data/Knowledge")
+DEFAULT_MODEL_CACHE = os.getenv("MODEL_CACHE", "/data/models")
+DEFAULT_INGEST_STATE_PATH = os.getenv("INGEST_STATE_PATH", "/data/ingest/state.json")
+DEFAULT_EMBED_DEVICE = (os.getenv("EMBED_DEVICE", "auto") or "auto").strip()
 
 
-def get_device():
-    """Get the best available device (GPU if available)"""
-    if torch.cuda.is_available():
-        device = "cuda:0"
-        logging.info(f"🚀 Using GPU: {torch.cuda.get_device_name(0)}")
-    else:
-        device = "cpu"
-        logging.info("⚠️ GPU not available, using CPU")
-    return device
-
-
-def get_files(paths: List[str]) -> List[str]:
-    """Get all PDF and JSON files from paths"""
-    all_files = []
-    for path in paths:
-        if os.path.isfile(path):
-            if path.lower().endswith(('.pdf', '.json')):
-                all_files.append(path)
-        elif os.path.isdir(path):
-            all_files.extend(glob.glob(os.path.join(path, "**/*.pdf"), recursive=True))
-            all_files.extend(glob.glob(os.path.join(path, "**/*.json"), recursive=True))
-    return all_files
-
-
-def flush_chunks(chunks_to_embed: List[Document], embedder, conn, collection: str) -> int:
-    """Embed and save a batch of chunks using batch INSERT (5-10x faster)"""
-    if not chunks_to_embed:
-        return 0
-    
-    cur = conn.cursor()
-    
-    # Apply correct instruction per chunk type
-    texts = []
-    for chunk in chunks_to_embed:
-        chunk_type = chunk.metadata.get("chunk_type", "prose")
-        instruction = get_embedding_instruction(chunk_type)
-        texts.append(instruction + chunk.page_content)
-    
-    logging.info(f"   🔄 Embedding {len(chunks_to_embed)} chunks...")
-    # Use normalized embeddings for better cosine similarity (BGE-M3 recommendation)
-    # batch_size=32 works well when Docling uses CPU (leaves GPU memory for embedding)
-    embeddings = embedder.encode(texts, show_progress_bar=True, batch_size=32, normalize_embeddings=True)
-    
-    # Prepare batch data
-    batch_data = []
-    for chunk, embedding in zip(chunks_to_embed, embeddings):
-        text = chunk.page_content
-        vector = embedding.tolist()
-        hash_ = hashlib.sha256(text.encode()).hexdigest()
-        metadata_json = json.dumps(chunk.metadata)
-        batch_data.append((text, vector, collection, hash_, metadata_json))
-    
-    # Batch INSERT (5-10x faster than individual inserts)
+def _env_int(key: str, default: int, minimum: int = 1) -> int:
+    raw = os.getenv(key)
     try:
-        execute_values(
-            cur,
-            """INSERT INTO documents (content, embedding, collection, hash, metadata)
-               VALUES %s ON CONFLICT (hash) DO NOTHING""",
-            batch_data,
-            template="(%s, %s, %s, %s, %s)"
+        value = int(str(raw)) if raw is not None else int(default)
+    except Exception:
+        value = int(default)
+    return max(minimum, value)
+
+
+DEFAULT_EMBED_MAX_TOKENS = _env_int("EMBED_MAX_TOKENS", 480, minimum=32)
+DEFAULT_EMBED_TOKEN_OVERLAP = _env_int("EMBED_TOKEN_OVERLAP", 64, minimum=0)
+
+
+@dataclass
+class FileRecord:
+    path: str
+    source: str
+    source_key: str
+    sha256: str
+    size: int
+    mtime: float
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _normalize_device(device: str) -> str:
+    value = (device or "auto").strip().lower()
+    if value in {"", "auto", "cpu", "cuda"}:
+        return value or "auto"
+    if value.startswith("cuda:"):
+        return value
+    raise ValueError(f"Unsupported device '{device}'. Use auto|cpu|cuda|cuda:N")
+
+
+def _validate_cuda_device(requested: str) -> str:
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA requested but torch.cuda.is_available() is False. "
+            f"torch.version.cuda={torch.version.cuda!s}. "
+            "Install CUDA-enabled torch and verify NVIDIA runtime."
         )
-        inserted = cur.rowcount
-    except Exception as e:
-        logging.error(f"❌ Batch insert error: {e}")
-        inserted = 0
-    
-    conn.commit()
-    cur.close()
-    logging.info(f"   ✅ Committed {inserted} new chunks")
-    
-    # Free up GPU memory to prevent fragmentation/OOM
-    del embeddings
-    del texts
-    gc.collect()
-    torch.cuda.empty_cache()
-    
-    return inserted
 
+    if requested == "cuda":
+        requested = "cuda:0"
 
-def get_already_processed(conn, collection: str) -> set:
-    """
-    Get set of already processed filenames for resume capability.
-    Uses basename only for consistent matching.
-    """
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT DISTINCT metadata->>'source' FROM documents WHERE collection=%s",
-        (collection,)
-    )
-    # metadata['source'] now always stores basename, so this matches correctly
-    already_processed = {row[0] for row in cur.fetchall() if row[0]}
-    cur.close()
-    return already_processed
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Embed documents into a Postgres vector database (Docling).")
-    parser.add_argument("files", nargs="+", help="Path(s) to PDF/JSON file(s) or folder(s) to embed.")
-    parser.add_argument("--collection", default="plcnext", help="Collection name.")
-    parser.add_argument("--batch-size", type=int, default=1000, help="Number of chunks per embedding batch.")
-    parser.add_argument("--chunk-size", type=int, default=800, help="Max characters per chunk.")
-    parser.add_argument("--chunk-overlap", type=int, default=150, help="Overlap between chunks.")
-    parser.add_argument("--model-cache", default="/app/models", help="Model cache directory.")
-    parser.add_argument("--dry-run", action="store_true", help="Parse files but don't embed or save.")
-    args = parser.parse_args()
-    
-    # Get all files
-    all_files = get_files(args.files)
-    
-    if not all_files:
-        logging.error("No PDF/JSON files found!")
-        exit(1)
-    
-    logging.info(f"📚 Found {len(all_files)} files to process")
-    
-    if args.dry_run:
-        logging.info("🔍 DRY RUN MODE - will parse but not embed or save")
-    
-    # Get device
-    device = get_device()
-    
-    # Initialize
-    BATCH_SIZE = args.batch_size
-    pending_chunks = []
-    total_embedded = 0
-    total_chunks_created = 0
-    total_files_processed = 0
-    
-    # Load embedding model once (skip in dry-run)
-    embedder = None
-    if not args.dry_run:
-        logging.info(f"📥 Loading embedding model: {EMBED_MODEL}")
-        embedder = SentenceTransformer(EMBED_MODEL, device=device, cache_folder=args.model_cache)
-        logging.info(f"✅ Model loaded on {device}")
-    
-    # Connect to database once (skip in dry-run)
-    conn = None
-    already_processed = set()
-    if not args.dry_run:
-        conn = psycopg2.connect(DB_URL)
-        already_processed = get_already_processed(conn, args.collection)
-        if already_processed:
-            logging.info(f"⏭️ Found {len(already_processed)} already processed files in collection '{args.collection}'")
-    
     try:
-        for file_idx, file_path in enumerate(tqdm(all_files, desc="📁 Processing files", unit="file")):
-            if not os.path.exists(file_path):
-                logging.warning(f"File not found: {file_path}")
-                continue
-            
-            # Skip already processed files (compare basenames consistently)
-            filename = os.path.basename(file_path)
-            if filename in already_processed:
-                logging.info(f"⏭️ [{file_idx + 1}/{len(all_files)}] Skipping {filename} (already embedded)")
-                continue
-            
-            chunks = []
-            
-            # Process based on file type
-            if file_path.lower().endswith('.json'):
-                chunks = create_json_qa_chunks(file_path)
-            elif file_path.lower().endswith('.pdf'):
+        index = int(requested.split(":", 1)[1]) if ":" in requested else 0
+    except Exception as e:
+        raise RuntimeError(f"Invalid CUDA device '{requested}': {e}") from e
+
+    count = torch.cuda.device_count()
+    if index < 0 or index >= count:
+        raise RuntimeError(f"CUDA device '{requested}' out of range. device_count={count}")
+
+    gpu_name = torch.cuda.get_device_name(index)
+    logging.info(
+        "Using GPU device=%s name=%s torch=%s cuda=%s",
+        requested,
+        gpu_name,
+        torch.__version__,
+        torch.version.cuda,
+    )
+    return requested
+
+
+def get_device(requested_device: str = "auto") -> str:
+    requested = _normalize_device(requested_device)
+
+    if requested == "cpu":
+        logging.info("Using CPU by explicit request (--device=cpu)")
+        return "cpu"
+
+    if FORCE_EMBED_CPU:
+        if requested.startswith("cuda"):
+            raise RuntimeError(
+                "EMBED_USE_CPU=true conflicts with requested CUDA device. "
+                "Unset EMBED_USE_CPU or use --device=cpu."
+            )
+        logging.info("Using CPU because EMBED_USE_CPU=true")
+        return "cpu"
+
+    if requested.startswith("cuda"):
+        return _validate_cuda_device(requested)
+
+    if torch.cuda.is_available():
+        return _validate_cuda_device("cuda:0")
+
+    logging.warning(
+        "GPU not available, falling back to CPU. torch=%s torch.version.cuda=%s",
+        torch.__version__,
+        torch.version.cuda,
+    )
+    return "cpu"
+
+
+def discover_files(paths: List[str]) -> List[str]:
+    """Collect PDF/JSON files from file and directory paths."""
+    found: set[str] = set()
+    for raw in paths:
+        path = os.path.abspath(raw)
+        if os.path.isfile(path):
+            if path.lower().endswith((".pdf", ".json")):
+                found.add(path)
+            continue
+
+        if os.path.isdir(path):
+            for ext in ("*.json", "*.pdf"):
+                pattern = os.path.join(path, "**", ext)
+                for hit in glob.glob(pattern, recursive=True):
+                    if os.path.isfile(hit):
+                        found.add(os.path.abspath(hit))
+
+    files = sorted(
+        found,
+        key=lambda p: (0 if p.lower().endswith(".json") else 1, p.lower()),
+    )
+    return files
+
+
+def file_sha256(file_path: str, chunk_size: int = 1024 * 1024) -> str:
+    digest = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for data in iter(lambda: f.read(chunk_size), b""):
+            digest.update(data)
+    return digest.hexdigest()
+
+
+def build_source_key(file_path: str, knowledge_root: str) -> str:
+    abs_file = os.path.abspath(file_path)
+    abs_root = os.path.abspath(knowledge_root)
+
+    try:
+        rel = os.path.relpath(abs_file, abs_root)
+    except Exception:
+        rel = os.path.basename(abs_file)
+
+    if rel.startswith(".."):
+        rel = os.path.basename(abs_file)
+
+    return rel.replace("\\", "/")
+
+
+def build_file_records(files: Iterable[str], knowledge_root: str) -> List[FileRecord]:
+    records: List[FileRecord] = []
+    for file_path in tqdm(list(files), desc="Fingerprinting", unit="file"):
+        stat = os.stat(file_path)
+        records.append(
+            FileRecord(
+                path=file_path,
+                source=os.path.basename(file_path),
+                source_key=build_source_key(file_path, knowledge_root),
+                sha256=file_sha256(file_path),
+                size=int(stat.st_size),
+                mtime=float(stat.st_mtime),
+            )
+        )
+    return records
+
+
+def build_chunk_metadata(file_record: FileRecord, embedded_at: str) -> Dict[str, Any]:
+    return {
+        "source_key": file_record.source_key,
+        "source_checksum": file_record.sha256,
+        "source_size": file_record.size,
+        "embedded_at": embedded_at,
+    }
+
+
+def build_state_entry(
+    file_record: FileRecord,
+    *,
+    chunk_count: int,
+    embedded_at: str,
+    bootstrapped: bool,
+) -> Dict[str, Any]:
+    return {
+        "sha256": file_record.sha256,
+        "size": file_record.size,
+        "mtime": file_record.mtime,
+        "source": file_record.source,
+        "chunk_count": int(chunk_count),
+        "last_embedded_at": embedded_at,
+        "bootstrapped": bool(bootstrapped),
+    }
+
+
+def load_chunks_for_file(
+    file_record: FileRecord,
+    *,
+    chunk_size: int,
+    chunk_overlap: int,
+    embedded_at: str,
+) -> List[Document]:
+    extra_metadata = build_chunk_metadata(file_record, embedded_at)
+    lower = file_record.path.lower()
+
+    if lower.endswith(".json"):
+        return create_json_qa_chunks(file_record.path, extra_metadata=extra_metadata)
+
+    if lower.endswith(".pdf"):
+        loader = DoclingLoader(file_path=file_record.path, export_type=ExportType.DOC_CHUNKS)
+        pages = loader.load()
+        return create_pdf_chunks(
+            pages,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            extra_metadata=extra_metadata,
+        )
+
+    return []
+
+
+def delete_source_rows(
+    cur,
+    collection: str,
+    source_key: str,
+    source_name: str,
+    *,
+    include_legacy_basename: bool = True,
+) -> int:
+    """
+    Remove rows for one source.
+    - Primary match: metadata->>'source_key'
+    - Backward compatibility: legacy rows without source_key, matched by basename in metadata->>'source'
+    """
+    if include_legacy_basename:
+        cur.execute(
+            """
+            DELETE FROM documents
+            WHERE collection = %s
+              AND (
+                metadata->>'source_key' = %s
+                OR (
+                  COALESCE(metadata->>'source_key', '') = ''
+                  AND metadata->>'source' = %s
+                )
+              )
+            """,
+            (collection, source_key, source_name),
+        )
+    else:
+        cur.execute(
+            """
+            DELETE FROM documents
+            WHERE collection = %s
+              AND metadata->>'source_key' = %s
+            """,
+            (collection, source_key),
+        )
+    return int(cur.rowcount or 0)
+
+
+def clear_torch_cache() -> None:
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+def _resolve_embedder_tokenizer(embedder: SentenceTransformer):
+    tokenizer = getattr(embedder, "tokenizer", None)
+    if tokenizer is not None:
+        return tokenizer
+    try:
+        first = embedder._first_module()
+        tokenizer = getattr(first, "tokenizer", None)
+        if tokenizer is not None:
+            return tokenizer
+    except Exception:
+        pass
+    return None
+
+
+def _token_ids(text: str, tokenizer) -> List[int]:
+    encoded = tokenizer(
+        text,
+        add_special_tokens=False,
+        truncation=False,
+        return_attention_mask=False,
+        return_token_type_ids=False,
+    )
+    input_ids = encoded.get("input_ids", [])
+    if not input_ids:
+        return []
+    if isinstance(input_ids[0], list):
+        return list(input_ids[0])
+    return list(input_ids)
+
+
+def enforce_chunk_token_limit(
+    chunks: List[Document],
+    embedder: SentenceTransformer,
+    *,
+    max_tokens: int,
+    overlap_tokens: int,
+) -> Tuple[List[Document], Dict[str, int]]:
+    """
+    Split oversized chunks by tokenizer window to avoid silent truncation.
+    """
+    tokenizer = _resolve_embedder_tokenizer(embedder)
+    if tokenizer is None:
+        return chunks, {"split_chunks": 0, "max_tokens_seen": 0, "expanded_chunks": len(chunks)}
+
+    max_tokens = max(32, int(max_tokens))
+    overlap_tokens = max(0, min(int(overlap_tokens), max_tokens - 1))
+    stride = max(1, max_tokens - overlap_tokens)
+
+    expanded: List[Document] = []
+    split_chunks = 0
+    max_tokens_seen = 0
+
+    for chunk in chunks:
+        text = chunk.page_content or ""
+        ids = _token_ids(text, tokenizer)
+        token_len = len(ids)
+        if token_len <= max_tokens:
+            expanded.append(chunk)
+            max_tokens_seen = max(max_tokens_seen, token_len)
+            continue
+
+        split_chunks += 1
+        max_tokens_seen = max(max_tokens_seen, token_len)
+
+        windows: List[Tuple[int, int, str]] = []
+        for start in range(0, token_len, stride):
+            end = min(token_len, start + max_tokens)
+            window_ids = ids[start:end]
+            window_text = tokenizer.decode(
+                window_ids,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=True,
+            ).strip()
+            if window_text:
+                windows.append((start, end, window_text))
+            if end >= token_len:
+                break
+
+        parts = len(windows)
+        if parts <= 1:
+            expanded.append(chunk)
+            continue
+
+        base_meta = dict(chunk.metadata or {})
+        for idx, (start, end, window_text) in enumerate(windows, start=1):
+            meta = base_meta.copy()
+            meta.update(
+                {
+                    "token_split": True,
+                    "token_part": idx,
+                    "token_parts": parts,
+                    "token_start": start,
+                    "token_end": end,
+                    "token_total": token_len,
+                }
+            )
+            expanded.append(Document(page_content=window_text, metadata=meta))
+
+    return expanded, {
+        "split_chunks": split_chunks,
+        "max_tokens_seen": max_tokens_seen,
+        "expanded_chunks": len(expanded),
+    }
+
+
+def insert_chunks_for_file(
+    conn,
+    embedder: SentenceTransformer,
+    chunks: List[Document],
+    collection: str,
+    *,
+    batch_size: int,
+    replace_source: Optional[Tuple[str, str, bool]] = None,
+) -> Tuple[int, int]:
+    """
+    Insert chunks for one file in a single DB transaction.
+
+    Returns:
+      (inserted_rows, deleted_rows)
+    """
+    inserted_total = 0
+    deleted_rows = 0
+
+    with conn.cursor() as cur:
+        if replace_source is not None:
+            source_key, source_name, include_legacy_basename = replace_source
+            deleted_rows = delete_source_rows(
+                cur,
+                collection,
+                source_key,
+                source_name,
+                include_legacy_basename=include_legacy_basename,
+            )
+
+        for idx in range(0, len(chunks), batch_size):
+            batch = chunks[idx : idx + batch_size]
+            texts: List[str] = []
+            for chunk in batch:
+                chunk_type = (chunk.metadata or {}).get("chunk_type", "prose")
+                instruction = get_embedding_instruction(str(chunk_type))
+                texts.append(instruction + chunk.page_content)
+
+            embeddings = embedder.encode(
+                texts,
+                show_progress_bar=False,
+                batch_size=32,
+                normalize_embeddings=True,
+            )
+
+            batch_data = []
+            for chunk, emb in zip(batch, embeddings):
+                content = chunk.page_content
+                chunk_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+                metadata_json = json.dumps(chunk.metadata or {}, ensure_ascii=False)
+                batch_data.append((content, emb.tolist(), collection, chunk_hash, metadata_json))
+
+            execute_values(
+                cur,
+                """
+                INSERT INTO documents (content, embedding, collection, hash, metadata)
+                VALUES %s
+                ON CONFLICT (hash) DO NOTHING
+                """,
+                batch_data,
+                template="(%s, %s, %s, %s, %s)",
+            )
+            inserted_total += int(cur.rowcount or 0)
+            clear_torch_cache()
+
+    conn.commit()
+    return inserted_total, deleted_rows
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Incremental embedding into PostgreSQL pgvector with persistent ingest state.",
+    )
+    parser.add_argument(
+        "files",
+        nargs="*",
+        help="Path(s) to PDF/JSON file(s) or folder(s). If omitted, --knowledge-root is used.",
+    )
+    parser.add_argument("--collection", default=DEFAULT_COLLECTION, help="Collection name")
+    parser.add_argument("--batch-size", type=int, default=1000, help="Chunks per DB insert batch")
+    parser.add_argument("--chunk-size", type=int, default=800, help="Max chars per chunk")
+    parser.add_argument("--chunk-overlap", type=int, default=150, help="Chunk overlap chars")
+    parser.add_argument("--model-cache", default=DEFAULT_MODEL_CACHE, help="Model cache directory")
+    parser.add_argument(
+        "--device",
+        default=DEFAULT_EMBED_DEVICE,
+        help="Embedding device: auto|cpu|cuda|cuda:N (default from EMBED_DEVICE or auto)",
+    )
+    parser.add_argument(
+        "--max-embed-tokens",
+        type=int,
+        default=DEFAULT_EMBED_MAX_TOKENS,
+        help="Hard token limit per chunk before embedding (default from EMBED_MAX_TOKENS)",
+    )
+    parser.add_argument(
+        "--embed-token-overlap",
+        type=int,
+        default=DEFAULT_EMBED_TOKEN_OVERLAP,
+        help="Token overlap used when splitting oversized chunks",
+    )
+    parser.add_argument("--knowledge-root", default=DEFAULT_KNOWLEDGE_DIR, help="Knowledge root for source_key")
+    parser.add_argument("--state-path", default=DEFAULT_INGEST_STATE_PATH, help="State JSON path")
+    parser.add_argument(
+        "--skip-mode",
+        choices=["checksum", "filename"],
+        default="checksum",
+        help="Skip policy for already processed files",
+    )
+
+    parser.add_argument(
+        "--bootstrap-from-db",
+        dest="bootstrap_from_db",
+        action="store_true",
+        help="Bootstrap state from existing DB rows when state file is missing",
+    )
+    parser.add_argument(
+        "--no-bootstrap-from-db",
+        dest="bootstrap_from_db",
+        action="store_false",
+        help="Disable bootstrap from DB",
+    )
+    parser.set_defaults(bootstrap_from_db=True)
+
+    parser.add_argument(
+        "--replace-updated",
+        dest="replace_updated",
+        action="store_true",
+        help="Delete old rows and re-embed when checksum changes",
+    )
+    parser.add_argument(
+        "--no-replace-updated",
+        dest="replace_updated",
+        action="store_false",
+        help="Skip changed files instead of replacing",
+    )
+    parser.set_defaults(replace_updated=True)
+    parser.add_argument(
+        "--replace-all",
+        action="store_true",
+        help="Force delete+re-embed every discovered file, even if unchanged",
+    )
+
+    parser.add_argument(
+        "--prune-missing",
+        action="store_true",
+        help="Delete DB rows/state entries for files missing from knowledge root",
+    )
+    parser.add_argument("--dry-run", action="store_true", help="Scan and chunk, but do not write DB/state")
+
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+
+    knowledge_root = os.path.abspath(args.knowledge_root)
+    input_paths = args.files if args.files else [knowledge_root]
+    state_path = os.path.abspath(args.state_path)
+    lock_path = build_lock_path(state_path)
+
+    all_files = discover_files(input_paths)
+    if not all_files:
+        logging.error("No PDF/JSON files found for paths: %s", input_paths)
+        raise SystemExit(1)
+
+    logging.info("Discovered %d files", len(all_files))
+    logging.info("Knowledge root: %s", knowledge_root)
+    logging.info("Ingest state: %s", state_path)
+    logging.info("Skip mode: %s | replace_updated=%s | bootstrap_from_db=%s", args.skip_mode, args.replace_updated, args.bootstrap_from_db)
+    logging.info("Requested embed device: %s", args.device)
+    logging.info(
+        "Token guard: max_embed_tokens=%d embed_token_overlap=%d",
+        max(32, int(args.max_embed_tokens)),
+        max(0, int(args.embed_token_overlap)),
+    )
+
+    file_records = build_file_records(all_files, knowledge_root)
+    source_name_counts: Dict[str, int] = {}
+    for rec in file_records:
+        source_name_counts[rec.source] = source_name_counts.get(rec.source, 0) + 1
+
+    # Load embedder only when writing embeddings.
+    embedder = None
+    device = get_device(args.device)
+    if not args.dry_run:
+        Path(args.model_cache).mkdir(parents=True, exist_ok=True)
+        logging.info("Loading embed model: %s", EMBED_MODEL)
+        embedder = SentenceTransformer(EMBED_MODEL, device=device, cache_folder=args.model_cache)
+        try:
+            embedder.max_seq_length = max(32, int(args.max_embed_tokens))
+            logging.info("Embedder max_seq_length set to %d", embedder.max_seq_length)
+        except Exception:
+            logging.warning("Could not set embedder max_seq_length; relying on model defaults")
+        logging.info("Embed model loaded on %s", device)
+
+    # DB connection (required for non-dry run; optional in dry-run).
+    conn = None
+    needs_db = (not args.dry_run) or args.bootstrap_from_db or args.prune_missing
+    if needs_db:
+        try:
+            db_url, source = resolve_database_url()
+            logging.info("Database URL source: %s", source)
+            logging.info("DB target: %s", redact_database_url(db_url))
+            conn = psycopg2.connect(db_url)
+        except Exception as e:
+            if args.dry_run:
+                logging.warning("DB unavailable in dry-run. bootstrap/prune disabled. error=%s", e)
+                args.bootstrap_from_db = False
+                args.prune_missing = False
+            else:
+                logging.error("Failed to connect DB: %s", e)
+                raise
+
+    total_inserted = 0
+    files_embedded = 0
+    files_skipped = 0
+    files_replaced = 0
+    files_failed = 0
+    files_bootstrapped = 0
+
+    try:
+        with with_lock(lock_path):
+            logging.info("Acquired ingest lock: %s", lock_path)
+            state, is_new_state = load_state(state_path, collection=args.collection, knowledge_root=knowledge_root)
+            state_files: Dict[str, Dict[str, Any]] = state.setdefault("files", {})
+
+            bootstrapped_recent: set[str] = set()
+            if (
+                is_new_state
+                and args.bootstrap_from_db
+                and conn is not None
+            ):
+                bootstrap_payload = [
+                    {
+                        "source_key": rec.source_key,
+                        "source": rec.source,
+                        "sha256": rec.sha256,
+                        "size": rec.size,
+                        "mtime": rec.mtime,
+                    }
+                    for rec in file_records
+                ]
+                result = bootstrap_state_from_db(
+                    conn,
+                    state=state,
+                    collection=args.collection,
+                    file_records=bootstrap_payload,
+                )
+                files_bootstrapped = int(result.get("bootstrapped", 0))
+                bootstrapped_recent = set(result.get("keys", []))
+                for key in sorted(bootstrapped_recent):
+                    logging.info("BOOTSTRAP_SKIP source_key=%s", key)
+
+                if files_bootstrapped > 0 and not args.dry_run:
+                    save_state(state_path, state)
+
+            if args.prune_missing:
+                discovered = {rec.source_key for rec in file_records}
+                missing_keys = sorted(set(state_files.keys()) - discovered)
+                if missing_keys:
+                    if args.dry_run:
+                        for key in missing_keys:
+                            logging.info("PRUNE_MISSING (dry-run) source_key=%s", key)
+                    elif conn is None:
+                        logging.warning("Skipping prune-missing: DB connection unavailable")
+                    else:
+                        deleted_total = 0
+                        try:
+                            state_source_counts: Dict[str, int] = {}
+                            for entry in state_files.values():
+                                src = str(entry.get("source") or "")
+                                if src:
+                                    state_source_counts[src] = state_source_counts.get(src, 0) + 1
+                            with conn.cursor() as cur:
+                                for key in missing_keys:
+                                    source_name = str(state_files.get(key, {}).get("source") or os.path.basename(key))
+                                    deleted_total += delete_source_rows(
+                                        cur,
+                                        args.collection,
+                                        key,
+                                        source_name,
+                                        include_legacy_basename=state_source_counts.get(source_name, 0) == 1,
+                                    )
+                                    state_files.pop(key, None)
+                                    logging.info("PRUNE_MISSING source_key=%s", key)
+                            conn.commit()
+                            save_state(state_path, state)
+                            logging.info(
+                                "Pruned %d missing file(s), deleted %d DB rows",
+                                len(missing_keys),
+                                deleted_total,
+                            )
+                        except Exception:
+                            conn.rollback()
+                            raise
+
+            for rec in tqdm(file_records, desc="Processing", unit="file"):
+                source_key = rec.source_key
+                entry = state_files.get(source_key)
+
+                if source_key in bootstrapped_recent and not args.replace_all:
+                    files_skipped += 1
+                    continue
+
+                should_embed = False
+                replace_old = False
+
+                if args.replace_all:
+                    logging.info("REPLACE_ALL source_key=%s", source_key)
+                    should_embed = True
+                    replace_old = True
+                elif entry is None:
+                    logging.info("EMBED_NEW source_key=%s", source_key)
+                    should_embed = True
+                else:
+                    if args.skip_mode == "filename":
+                        logging.info("SKIP_UNCHANGED source_key=%s reason=filename", source_key)
+                        files_skipped += 1
+                        continue
+
+                    prev_sha = str(entry.get("sha256") or "")
+                    if prev_sha == rec.sha256:
+                        logging.info("SKIP_UNCHANGED source_key=%s reason=checksum", source_key)
+                        files_skipped += 1
+                        continue
+
+                    if not args.replace_updated:
+                        logging.info("SKIP_UNCHANGED source_key=%s reason=updated_no_replace", source_key)
+                        files_skipped += 1
+                        continue
+
+                    logging.info(
+                        "REPLACE_UPDATED source_key=%s old_sha=%s new_sha=%s",
+                        source_key,
+                        prev_sha[:12],
+                        rec.sha256[:12],
+                    )
+                    should_embed = True
+                    replace_old = True
+
+                if not should_embed:
+                    continue
+
+                embedded_at = utc_now_iso()
+
                 try:
-                    loader = DoclingLoader(file_path=file_path, export_type=ExportType.DOC_CHUNKS)
-                    pages = loader.load()
-                    chunks = create_pdf_chunks(
-                        pages,
+                    chunks = load_chunks_for_file(
+                        rec,
                         chunk_size=args.chunk_size,
-                        chunk_overlap=args.chunk_overlap
+                        chunk_overlap=args.chunk_overlap,
+                        embedded_at=embedded_at,
                     )
                 except Exception as e:
-                    logging.error(f"❌ Failed to process PDF {file_path}: {e}")
+                    files_failed += 1
+                    logging.error("Failed to parse %s: %s", rec.path, e, exc_info=True)
                     continue
-            
-            total_chunks_created += len(chunks)
-            total_files_processed += 1
-            
-            # Log progress
-            logging.info(f"📄 [{file_idx + 1}/{len(all_files)}] {filename}: {len(chunks)} chunks")
-            
-            if args.dry_run:
-                continue  # Skip embedding in dry-run
-            
-            pending_chunks.extend(chunks)
-            
-            # Flush when we have enough pending chunks
-            while len(pending_chunks) >= BATCH_SIZE:
-                batch = pending_chunks[:BATCH_SIZE]
-                pending_chunks = pending_chunks[BATCH_SIZE:]
-                total_embedded += flush_chunks(batch, embedder, conn, args.collection)
-        
-        # Flush remaining chunks
-        if pending_chunks and not args.dry_run:
-            logging.info(f"📦 Flushing final {len(pending_chunks)} chunks...")
-            total_embedded += flush_chunks(pending_chunks, embedder, conn, args.collection)
-        
-        # Summary
-        if args.dry_run:
-            logging.info(f"🔍 DRY RUN COMPLETE: Would create {total_chunks_created} chunks from {total_files_processed} files")
-        else:
-            logging.info(f"🎉 Done! Embedded {total_embedded} chunks from {total_files_processed} files")
-    
-    except Exception as e:
-        logging.error(f"❌ Error: {e}", exc_info=True)
+
+                final_chunks = chunks
+                if not args.dry_run and embedder is not None:
+                    final_chunks, split_stats = enforce_chunk_token_limit(
+                        chunks,
+                        embedder,
+                        max_tokens=int(args.max_embed_tokens),
+                        overlap_tokens=int(args.embed_token_overlap),
+                    )
+                    if split_stats.get("split_chunks", 0) > 0:
+                        logging.warning(
+                            "TOKEN_SPLIT source_key=%s split_chunks=%d original_chunks=%d final_chunks=%d max_tokens_seen=%d",
+                            source_key,
+                            split_stats.get("split_chunks", 0),
+                            len(chunks),
+                            split_stats.get("expanded_chunks", len(final_chunks)),
+                            split_stats.get("max_tokens_seen", 0),
+                        )
+
+                if args.dry_run:
+                    logging.info(
+                        "DRY_RUN source_key=%s action=%s chunks=%d",
+                        source_key,
+                        "replace" if replace_old else "embed",
+                        len(final_chunks),
+                    )
+                    continue
+
+                if conn is None or embedder is None:
+                    files_failed += 1
+                    logging.error("Cannot embed %s: DB connection or embedder unavailable", source_key)
+                    continue
+
+                try:
+                    inserted, deleted = insert_chunks_for_file(
+                        conn,
+                        embedder,
+                        final_chunks,
+                        args.collection,
+                        batch_size=max(1, int(args.batch_size)),
+                        replace_source=(
+                            source_key,
+                            rec.source,
+                            source_name_counts.get(rec.source, 0) == 1,
+                        ) if replace_old else None,
+                    )
+                except Exception as e:
+                    conn.rollback()
+                    files_failed += 1
+                    logging.error("Failed to embed %s: %s", source_key, e, exc_info=True)
+                    continue
+
+                state_files[source_key] = build_state_entry(
+                    rec,
+                    chunk_count=len(final_chunks),
+                    embedded_at=embedded_at,
+                    bootstrapped=False,
+                )
+                save_state(state_path, state)
+
+                total_inserted += inserted
+                files_embedded += 1
+                if replace_old:
+                    files_replaced += 1
+
+                logging.info(
+                    "Embedded %s | chunks=%d inserted=%d deleted_old=%d",
+                    source_key,
+                    len(final_chunks),
+                    inserted,
+                    deleted,
+                )
+
     finally:
-        if conn:
+        if conn is not None:
             conn.close()
+
+    logging.info("=" * 64)
+    logging.info("Ingest complete")
+    logging.info(
+        "files=%d embedded=%d replaced=%d skipped=%d bootstrapped=%d failed=%d inserted_chunks=%d",
+        len(file_records),
+        files_embedded,
+        files_replaced,
+        files_skipped,
+        files_bootstrapped,
+        files_failed,
+        total_inserted,
+    )
+    logging.info("=" * 64)
 
 
 if __name__ == "__main__":

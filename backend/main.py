@@ -72,6 +72,7 @@ from app.seed import (
     get_auto_embed_knowledge_dir,
     get_default_golden_qa_path,
     seed_golden_qa_if_empty,
+    should_allow_startup_ingest_in_production,
     should_auto_embed_force_rescan,
     should_auto_embed_sync_if_not_empty,
     should_auto_embed_knowledge,
@@ -435,6 +436,21 @@ def test_database_connection(db_pool) -> bool:
 def run_background_startup_tasks(app: FastAPI) -> None:
     """Load heavy optional services without blocking API startup."""
     try:
+        auto_embed_enabled = should_auto_embed_knowledge()
+        auto_seed_enabled = should_auto_seed()
+        auto_embed_sync_if_not_empty = should_auto_embed_sync_if_not_empty()
+        auto_embed_force_rescan = should_auto_embed_force_rescan()
+        knowledge_dir = get_auto_embed_knowledge_dir()
+        logger.info(
+            "Bootstrap config: auto_embed=%s sync_if_not_empty=%s force_rescan=%s auto_seed=%s knowledge_dir=%s allow_startup_ingest_in_prod=%s",
+            auto_embed_enabled,
+            auto_embed_sync_if_not_empty,
+            auto_embed_force_rescan,
+            auto_seed_enabled,
+            knowledge_dir or "<auto>",
+            should_allow_startup_ingest_in_production(),
+        )
+
         app.state.embedder = None
         try:
             app.state.embedder = get_embedder()
@@ -443,24 +459,26 @@ def run_background_startup_tasks(app: FastAPI) -> None:
             logger.error(f"🔥 Failed to load embedder: {e}")
             return
 
-        if should_auto_embed_knowledge():
+        if auto_embed_enabled:
             try:
                 auto_embed_result = auto_embed_knowledge_if_empty(
                     db_pool=app.state.db_pool,
                     embedder=app.state.embedder,
                     collection=config.DEFAULT_COLLECTION,
-                    knowledge_dir=get_auto_embed_knowledge_dir(),
+                    knowledge_dir=knowledge_dir,
                     batch_size=get_auto_embed_batch_size(),
                     chunk_size=get_auto_embed_chunk_size(),
                     chunk_overlap=get_auto_embed_chunk_overlap(),
-                    sync_if_not_empty=should_auto_embed_sync_if_not_empty(),
-                    skip_known_sources=not should_auto_embed_force_rescan(),
+                    sync_if_not_empty=auto_embed_sync_if_not_empty,
+                    skip_known_sources=not auto_embed_force_rescan,
                 )
                 logger.info("📚 Knowledge auto-embed result: %s", auto_embed_result)
             except Exception as e:
                 logger.error(f"🔥 Knowledge auto-embed failed: {e}", exc_info=True)
+        else:
+            logger.info("📚 Startup auto-embed disabled")
 
-        if should_auto_seed():
+        if auto_seed_enabled:
             try:
                 seed_result = seed_golden_qa_if_empty(
                     db_pool=app.state.db_pool,
@@ -473,6 +491,8 @@ def run_background_startup_tasks(app: FastAPI) -> None:
                 logger.info(f"🌱 Golden QA seed result: {seed_result}")
             except Exception as e:
                 logger.error(f"🔥 Golden QA auto-seed failed: {e}", exc_info=True)
+        else:
+            logger.info("🌱 Startup auto-seed disabled")
     except Exception as e:
         logger.error("🔥 Background startup tasks failed: %s", e, exc_info=True)
 
@@ -763,7 +783,7 @@ async def lifespan(app: FastAPI):
         )
         bootstrap_thread.start()
         app.state.bootstrap_thread = bootstrap_thread
-        logger.info("🧵 Background bootstrap started (embedder/auto-embed/seed)")
+        logger.info("🧵 Background bootstrap started (embedder + optional ingest/seed)")
     else:
         run_background_startup_tasks(app)
     

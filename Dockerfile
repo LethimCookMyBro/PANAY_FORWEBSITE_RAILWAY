@@ -35,11 +35,13 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
 COPY backend /app/backend
+COPY scripts /app/scripts
 COPY server.js /app/server.js
 COPY start-single-service.sh /app/start-single-service.sh
 COPY --from=frontend-builder /build/frontend/dist /app/frontend/dist
 
-RUN chmod +x /app/start-single-service.sh
+RUN chmod +x /app/start-single-service.sh \
+ && find /app/scripts -type f -name "*.sh" -exec chmod +x {} \;
 
 EXPOSE 3000
 

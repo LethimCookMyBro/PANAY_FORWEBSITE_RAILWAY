@@ -31,3 +31,19 @@ ollama/
 # OS
 .DS_Store
 Thumbs.db
+# Local caches / ingest state
+.ingest/
+.models/
+**/.locks/
+*.lock
+
+# Model weights / big artifacts
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.onnx
+
+# Python junk
+__pycache__/
+*.pyc

@@ -215,7 +215,7 @@ def chat(
 
     llm = get_llm()
     embedder = _get_request_embedder(request)
-    request_budget_seconds = max(5.0, _env_float("CHAT_REQUEST_TIMEOUT_SECONDS", 24.0))
+    request_budget_seconds = max(5.0, _env_float("CHAT_REQUEST_TIMEOUT_SECONDS", 180.0))
 
     # 1) Create session if not provided
     if payload.session_id is None:

@@ -53,38 +53,39 @@ docker compose exec ollama ollama pull phi3:mini
 
 ## Embedding Documents
 
-To add your own documents to the knowledge base:
+The embed pipeline is now **incremental** with a persistent ingest state file.
 
-### 1. Map your folder in `docker-compose.yml`
+Behavior:
+- Existing file with same checksum: skip
+- New file: embed
+- Existing file with changed checksum: replace old chunks then embed new
+- First run without state file: bootstrap state from DB (no re-embed for existing sources)
+
+### Docker Compose (local)
 
 ```yaml
 services:
   backend:
     volumes:
       - ./backend:/app
-      - "D:/YourDocs:/app/data/custom"  # Add your path
+      - ./data:/data
 ```
 
-### 2. Restart and run embed command
-
 ```bash
-# Restart to apply volume changes
-docker compose restart backend
+# Optional: create volume-like folders
+mkdir -p ./data/Knowledge ./data/models ./data/ingest
 
-# Embed all PDFs in folder
-docker compose exec backend python embed.py //app/data/custom
-
-# Embed specific file
-docker compose exec backend python embed.py //app/data/custom/manual.pdf
-
-# Dry-run (preview only)
-docker compose exec backend python embed.py //app/data/custom --dry-run
-
-# Custom options
-docker compose exec backend python embed.py //app/data/custom \
+# Embed knowledge folder manually
+docker compose exec backend python embed.py /data/Knowledge \
   --collection plcnext \
-  --chunk-size 1000 \
-  --batch-size 500
+  --knowledge-root /data/Knowledge \
+  --state-path /data/ingest/state.json \
+  --skip-mode checksum \
+  --bootstrap-from-db \
+  --replace-updated
+
+# Dry-run (no DB/state write)
+docker compose exec backend python embed.py /data/Knowledge --dry-run
 ```
 
 ### Embed Options
@@ -92,9 +93,19 @@ docker compose exec backend python embed.py //app/data/custom \
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--collection` | `plcnext` | Vector store collection name |
-| `--chunk-size` | `1000` | Characters per chunk |
-| `--chunk-overlap` | `200` | Overlap between chunks |
+| `--knowledge-root` | `KNOWLEDGE_DIR` | Root path used to build `source_key` |
+| `--state-path` | `INGEST_STATE_PATH` | Persistent ingest state JSON |
+| `--device` | `auto` | Embedding device (`auto`, `cpu`, `cuda`, `cuda:N`) |
+| `--skip-mode` | `checksum` | Skip by `checksum` or `filename` |
+| `--bootstrap-from-db` | `true` | Build state from existing DB docs if state missing |
+| `--replace-updated` | `true` | Replace old rows when checksum changes |
+| `--replace-all` | `false` | Force rebuild all discovered sources |
+| `--prune-missing` | `false` | Delete rows/state for files missing from disk |
+| `--chunk-size` | `800` | Characters per chunk |
+| `--chunk-overlap` | `150` | Overlap between chunks |
 | `--batch-size` | `1000` | Embeddings per batch |
+| `--max-embed-tokens` | `480` | Hard token cap per chunk before embedding |
+| `--embed-token-overlap` | `64` | Token overlap when oversized chunk is split |
 | `--dry-run` | `false` | Preview without saving |
 
 ## Common Commands
@@ -127,6 +138,17 @@ LLM_TEMPERATURE=0.7
 
 # Embeddings
 EMBED_MODEL=BAAI/bge-m3
+EMBED_DEVICE=auto
+MODEL_CACHE=/data/models
+KNOWLEDGE_DIR=/data/Knowledge
+INGEST_STATE_PATH=/data/ingest/state.json
+EMBED_MAX_TOKENS=480
+EMBED_TOKEN_OVERLAP=64
+
+# Production recommendation: use manual ingest command instead of startup auto-embed
+AUTO_EMBED_KNOWLEDGE=false
+AUTO_EMBED_SYNC_IF_NOT_EMPTY=false
+ALLOW_STARTUP_INGEST_IN_PRODUCTION=false
 
 # RAG Settings
 RETRIEVE_LIMIT=50
@@ -160,6 +182,14 @@ Required env (same as backend requirements):
   - `DATABASE_URL=<postgresql://...>`
   - or all fallback vars: `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`
 - plus your existing backend env variables
+- Railway volume setup:
+  - mount path: `/data`
+  - set `KNOWLEDGE_DIR=/data/Knowledge`
+  - set `MODEL_CACHE=/data/models`
+  - set `INGEST_STATE_PATH=/data/ingest/state.json`
+  - set `AUTO_EMBED_KNOWLEDGE=false`
+  - set `AUTO_EMBED_SYNC_IF_NOT_EMPTY=false`
+  - set `ALLOW_STARTUP_INGEST_IN_PRODUCTION=false`
 
 Recommended for single-service mode:
 
@@ -174,6 +204,29 @@ Invalid examples (do not use):
 ```env
 DATABASE_URL=${DATABASE_URL}
 API_PROXY_TARGET=http://127.0.0.1:$PORT
+```
+
+Run ingest manually from Railway shell:
+
+```bash
+mkdir -p /data/Knowledge /data/models /data/ingest
+python /app/backend/embed.py /data/Knowledge \
+  --collection plcnext \
+  --knowledge-root /data/Knowledge \
+  --state-path /data/ingest/state.json \
+  --skip-mode checksum \
+  --bootstrap-from-db \
+  --replace-updated
+```
+
+Or use the helper script:
+
+```bash
+# incremental (default)
+sh /app/scripts/ingest_knowledge.sh
+
+# full rebuild (delete+re-embed all discovered files)
+INGEST_MODE=rebuild sh /app/scripts/ingest_knowledge.sh
 ```
 
 ### Option B: Two Railway services (frontend + backend split)

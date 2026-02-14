@@ -392,29 +392,32 @@ def build_source_citations(selected_docs: List, max_items: int = 6) -> List[Dict
     return citations
 
 
-def format_source_citations(citations: List[Dict[str, Any]]) -> str:
-    if not citations:
-        return ""
+def build_citations_from_docs(docs):
+    seen = set()
+    citations = []
 
-    lines = ["Sources:"]
-    for item in citations:
-        source = item.get("source", "Unknown source")
-        page = _coerce_positive_int(item.get("page"))
+    for d in docs:
+        md = getattr(d, "metadata", {}) or {}
+
+        source = md.get("source_key") or md.get("source") or "unknown"
+        page = md.get("page") or 0
+
+        try:
+            page = int(page)
+        except Exception:
+            page = 0
+
+        key = (source, page)
+        if key in seen:
+            continue
+        seen.add(key)
+
         if page > 0:
-            lines.append(f"- {source}, page {page}")
+            citations.append(f"{source} หน้า {page}")
         else:
-            lines.append(f"- {source}")
-    return "\n".join(lines)
+            citations.append(f"{source}")
 
-
-def append_source_citations(reply: str, citations: List[Dict[str, Any]]) -> str:
-    text = str(reply or "").strip()
-    if not text or not citations:
-        return text
-    lowered = text.lower()
-    if "sources:" in lowered or "source:" in lowered or "อ้างอิง" in text:
-        return text
-    return text + "\n\n" + format_source_citations(citations)
+    return citations
 
 
 # ============================================================
@@ -787,7 +790,9 @@ def answer_question(
             ragas_scores = None
 
     if allow_source_citations and _env_bool("APPEND_SOURCE_CITATIONS", True):
-        reply = append_source_citations(reply, citation_items)
+        citations = build_citations_from_docs(selected_docs)
+        if citations:
+            reply += "\n\nอ้างอิง:\n- " + "\n- ".join(citations)
 
     total_time = time.perf_counter() - t0
 

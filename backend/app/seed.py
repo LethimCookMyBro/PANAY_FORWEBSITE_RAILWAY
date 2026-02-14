@@ -16,11 +16,16 @@ from app.embed_logic import (
 
 logger = logging.getLogger(__name__)
 DEFAULT_KNOWLEDGE_DIR_CANDIDATES = (
+    "/data/Knowledge",
     "/app/data/Knowledge",
     "/app/backend/data/Knowledge",
     "data/Knowledge",
     "backend/data/Knowledge",
 )
+
+
+def _app_env() -> str:
+    return (os.getenv("APP_ENV", "development") or "development").strip().lower()
 
 
 def _as_bool(value: str, default: bool = False) -> bool:
@@ -44,14 +49,17 @@ def _safe_non_negative_int(value: Optional[str], default: int) -> int:
 
 
 def resolve_knowledge_dir(preferred: str = "") -> str:
-    candidates: List[str] = []
     if preferred:
-        candidates.append(preferred)
+        # If caller explicitly sets KNOWLEDGE_DIR, do not silently fall back
+        # to bundled paths; returning preferred lets caller surface clear error.
+        return os.path.abspath(preferred)
+
+    candidates: List[str] = []
     candidates.extend(DEFAULT_KNOWLEDGE_DIR_CANDIDATES)
     for candidate in candidates:
         if candidate and os.path.isdir(candidate):
             return os.path.abspath(candidate)
-    return os.path.abspath(preferred) if preferred else ""
+    return ""
 
 
 def _discover_knowledge_files(knowledge_dir: str) -> List[str]:
@@ -265,13 +273,25 @@ def should_auto_seed() -> bool:
     return _as_bool(os.getenv("AUTO_SEED_GOLDEN_QA", "true"), default=True)
 
 
+def should_allow_startup_ingest_in_production() -> bool:
+    return _as_bool(os.getenv("ALLOW_STARTUP_INGEST_IN_PRODUCTION", "false"), default=False)
+
+
 def should_auto_embed_knowledge() -> bool:
     raw = os.getenv("AUTO_EMBED_KNOWLEDGE")
     if raw is None:
         # Safe default: avoid heavy startup ingestion on production unless explicitly enabled.
-        app_env = (os.getenv("APP_ENV", "development") or "development").strip().lower()
-        return app_env != "production"
-    return _as_bool(raw, default=False)
+        enabled = _app_env() != "production"
+    else:
+        enabled = _as_bool(raw, default=False)
+
+    if _app_env() == "production" and enabled and not should_allow_startup_ingest_in_production():
+        logger.warning(
+            "AUTO_EMBED_KNOWLEDGE is enabled but blocked in production. "
+            "Use manual ingest CLI, or set ALLOW_STARTUP_INGEST_IN_PRODUCTION=true to override."
+        )
+        return False
+    return enabled
 
 
 def should_auto_embed_force_rescan() -> bool:
@@ -403,7 +423,7 @@ def get_default_golden_qa_path(preferred: str = "") -> str:
     resolved_dir = resolve_knowledge_dir("")
     if resolved_dir:
         return os.path.join(resolved_dir, "golden_qa.json")
-    return "/app/data/Knowledge/golden_qa.json"
+    return "/data/Knowledge/golden_qa.json"
 
 
 def get_auto_embed_batch_size() -> int:

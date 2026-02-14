@@ -7,8 +7,31 @@ from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sentence_transformers import SentenceTransformer
 
+try:
+    import torch
+except Exception:  # pragma: no cover
+    torch = None
+
 # Singleton embedder instance
 _embedder = None
+
+
+def _resolve_embed_device() -> str:
+    requested = (os.getenv("EMBED_DEVICE", "auto") or "auto").strip().lower()
+
+    if requested == "cpu":
+        return "cpu"
+
+    if requested.startswith("cuda"):
+        if torch is None or not torch.cuda.is_available():
+            logging.warning("EMBED_DEVICE=%s requested, but CUDA is unavailable. Falling back to CPU.", requested)
+            return "cpu"
+        return "cuda:0" if requested == "cuda" else requested
+
+    # auto
+    if torch is not None and torch.cuda.is_available():
+        return "cuda:0"
+    return "cpu"
 
 def get_embedder():
     """
@@ -18,9 +41,10 @@ def get_embedder():
     global _embedder
     if _embedder is None:
         model_name = os.getenv("EMBED_MODEL", "BAAI/bge-m3")
-        cache_folder = os.getenv("MODEL_CACHE", "/app/models")
-        logging.info(f"[get_embedder] Loading embedder: {model_name}")
-        _embedder = SentenceTransformer(model_name, cache_folder=cache_folder)
+        cache_folder = os.getenv("MODEL_CACHE", "/data/models")
+        device = _resolve_embed_device()
+        logging.info(f"[get_embedder] Loading embedder: {model_name} (device={device})")
+        _embedder = SentenceTransformer(model_name, cache_folder=cache_folder, device=device)
         logging.info("[get_embedder] Embedder loaded successfully")
     return _embedder
 
@@ -390,7 +414,8 @@ def extract_tables_and_prose(text: str) -> tuple[List[str], str]:
 def create_pdf_chunks(
     docs: List[Document],
     chunk_size: int = 800,
-    chunk_overlap: int = 150
+    chunk_overlap: int = 150,
+    extra_metadata: Optional[Dict[str, Any]] = None,
 ) -> List[Document]:
     """
     Create chunks from Docling-extracted documents with filtering.
@@ -440,10 +465,13 @@ def create_pdf_chunks(
             
             if combined_len > 25 and value_has_content and not is_garbage:
                 kv_content = f"{file_label}: {key_clean}: {value_clean}"
+                kv_meta = {"source": os.path.basename(source), "page": page_number, "chunk_type": "spec_pair"}
+                if extra_metadata:
+                    kv_meta.update(extra_metadata)
                 kv_chunk = Document(
                     page_content=kv_content,
                     metadata=enhance_metadata(
-                        {"source": os.path.basename(source), "page": page_number, "chunk_type": "spec_pair"},
+                        kv_meta,
                         kv_content
                     )
                 )
@@ -466,10 +494,13 @@ def create_pdf_chunks(
             table_chunks = split_table_by_rows(table, max_chars=chunk_size)
             for table_chunk_text in table_chunks:
                 labeled_content = f"{file_label}: {table_chunk_text}"
+                table_meta = {"source": os.path.basename(source), "page": page_number, "chunk_type": "table"}
+                if extra_metadata:
+                    table_meta.update(extra_metadata)
                 table_chunk = Document(
                     page_content=labeled_content,
                     metadata=enhance_metadata(
-                        {"source": os.path.basename(source), "page": page_number, "chunk_type": "table"},
+                        table_meta,
                         labeled_content
                     )
                 )
@@ -489,10 +520,10 @@ def create_pdf_chunks(
                 # Prepend file label to chunk content
                 labeled_content = f"{file_label}: {chunk.page_content}"
                 chunk.page_content = labeled_content
-                chunk.metadata = enhance_metadata(
-                    {"source": os.path.basename(source), "page": page_number, "chunk_type": "prose"},
-                    labeled_content
-                )
+                prose_meta = {"source": os.path.basename(source), "page": page_number, "chunk_type": "prose"}
+                if extra_metadata:
+                    prose_meta.update(extra_metadata)
+                chunk.metadata = enhance_metadata(prose_meta, labeled_content)
                 # Apply filtering
                 is_valid, reason = is_valid_chunk(chunk)
                 if is_valid:
@@ -504,7 +535,10 @@ def create_pdf_chunks(
     return all_chunks
 
 
-def create_json_qa_chunks(file_path: str) -> List[Document]:
+def create_json_qa_chunks(
+    file_path: str,
+    extra_metadata: Optional[Dict[str, Any]] = None,
+) -> List[Document]:
     """Create chunks from JSON QA file"""
     chunks = []
     file_label = get_file_label(file_path)
@@ -514,10 +548,10 @@ def create_json_qa_chunks(file_path: str) -> List[Document]:
         for pair in qa_pairs:
             # Prepend file label for consistency with PDF chunks
             content = f"{file_label}: Question: {pair.get('question', '')}\nAnswer: {pair.get('answer', '')}"
-            metadata = enhance_metadata(
-                {"source": os.path.basename(file_path), "chunk_type": "golden_qa"},
-                content
-            )
+            metadata_base = {"source": os.path.basename(file_path), "chunk_type": "golden_qa"}
+            if extra_metadata:
+                metadata_base.update(extra_metadata)
+            metadata = enhance_metadata(metadata_base, content)
             chunks.append(Document(page_content=content, metadata=metadata))
         logging.info(f"✅ Created {len(chunks)} chunks from Golden QA Set.")
     except Exception as e:

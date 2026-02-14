@@ -27,7 +27,7 @@ def _get_ranker():
     global _ranker_instance
     if _ranker_instance is None and _FLASHRANK_AVAILABLE:
         model = os.getenv("RERANK_MODEL", "ms-marco-MiniLM-L-12-v2")
-        cache_dir = os.getenv("MODEL_CACHE", "/app/models")
+        cache_dir = os.getenv("MODEL_CACHE", "/data/models")
         _ranker_instance = Ranker(model_name=model, cache_dir=cache_dir)
         logging.info(f"[Ranker] Initialized: {model}")
     return _ranker_instance
