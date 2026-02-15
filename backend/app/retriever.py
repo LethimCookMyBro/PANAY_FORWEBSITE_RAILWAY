@@ -52,6 +52,90 @@ def _env_int(key: str, default: int) -> int:
         return default
 
 
+def _env_bool(key: str, default: bool = False) -> bool:
+    raw = os.getenv(key)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+_HYBRID_HINT_TERMS = (
+    "station",
+    "parameter",
+    "parameters",
+    "refresh",
+    "write",
+    "reset",
+    "diagnostic",
+    "network",
+    "mode",
+    "buffer memory",
+    "cc-link",
+    "profinet",
+    "gx works",
+)
+
+_STOPWORDS = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "from",
+    "that",
+    "this",
+    "have",
+    "what",
+    "when",
+    "where",
+    "which",
+    "into",
+    "your",
+    "about",
+    "please",
+    "need",
+    "show",
+    "help",
+}
+
+
+def _extract_query_keywords(query: str, max_terms: int = 12) -> List[str]:
+    q = (query or "").lower().strip()
+    if not q:
+        return []
+
+    terms: List[str] = []
+    for phrase in _HYBRID_HINT_TERMS:
+        if phrase in q:
+            terms.append(phrase)
+
+    for token in re.findall(r"[a-z0-9][a-z0-9\-_/]{1,}", q):
+        if len(token) < 3 or token in _STOPWORDS:
+            continue
+        terms.append(token)
+
+    seen = set()
+    unique: List[str] = []
+    for term in terms:
+        if term in seen:
+            continue
+        seen.add(term)
+        unique.append(term)
+        if len(unique) >= max_terms:
+            break
+    return unique
+
+
+def _doc_dedupe_key(content: str, metadata: Any) -> Tuple[str, str, int]:
+    meta = _safe_load_json(metadata)
+    source_key = str(meta.get("source_key") or meta.get("source") or "")
+    try:
+        page = int(meta.get("page") or 0)
+    except Exception:
+        page = 0
+    preview = (content or "")[:180]
+    return (source_key, preview, page)
+
+
 # ===============================
 # Base Vector Retriever (pgvector)
 # ===============================
@@ -67,6 +151,44 @@ class PostgresVectorRetriever(BaseRetriever):
     collection: str = Field(default="plcnext")
     limit: int = Field(default_factory=lambda: _env_int("RETRIEVE_LIMIT", 50))
 
+    def _fetch_semantic_rows(self, cur, query_vector) -> List[Tuple[Any, Any, Any]]:
+        cur.execute(
+            """
+            SELECT content, metadata, embedding <-> %s AS distance
+            FROM documents
+            WHERE collection = %s
+            ORDER BY embedding <-> %s
+            LIMIT %s
+            """,
+            (query_vector, self.collection, query_vector, self.limit),
+        )
+        return cur.fetchall()
+
+    def _fetch_keyword_rows(self, cur, query_vector, query: str) -> List[Tuple[Any, Any, Any]]:
+        if not _env_bool("HYBRID_KEYWORD_ENABLED", True):
+            return []
+
+        keyword_terms = _extract_query_keywords(query, max_terms=_env_int("HYBRID_KEYWORD_MAX_TERMS", 12))
+        if not keyword_terms:
+            return []
+
+        keyword_limit = _env_int("HYBRID_KEYWORD_LIMIT", 20)
+        likes = [f"%{term}%" for term in keyword_terms]
+        match_clause = " OR ".join(["lower(content) LIKE %s"] * len(likes))
+        sql = f"""
+            SELECT content, metadata, embedding <-> %s AS distance
+            FROM documents
+            WHERE collection = %s
+              AND ({match_clause})
+            ORDER BY embedding <-> %s
+            LIMIT %s
+        """
+        params: List[Any] = [query_vector, self.collection]
+        params.extend(likes)
+        params.extend([query_vector, keyword_limit])
+        cur.execute(sql, params)
+        return cur.fetchall()
+
     def _get_relevant_documents(self, query: str) -> List[Document]:
         # SentenceTransformer embedder returns numpy.ndarray
         query_vector = self.embedder.encode(query)
@@ -75,22 +197,30 @@ class PostgresVectorRetriever(BaseRetriever):
         try:
             register_vector(conn)
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT content, metadata, embedding <-> %s AS distance
-                    FROM documents
-                    WHERE collection = %s
-                    ORDER BY embedding <-> %s
-                    LIMIT %s
-                    """,
-                    (query_vector, self.collection, query_vector, self.limit),
-                )
-                rows = cur.fetchall()
+                semantic_rows = self._fetch_semantic_rows(cur, query_vector)
+                keyword_rows = self._fetch_keyword_rows(cur, query_vector, query)
+
+            merged_rows: List[Tuple[Any, Any, Any]] = []
+            seen = set()
+            for row in semantic_rows:
+                key = _doc_dedupe_key(row[0], row[1])
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged_rows.append(row)
+            for row in keyword_rows:
+                key = _doc_dedupe_key(row[0], row[1])
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged_rows.append(row)
 
             docs: List[Document] = []
-            for content, metadata, distance in rows:
+            semantic_seen = {_doc_dedupe_key(r[0], r[1]) for r in semantic_rows}
+            for content, metadata, distance in merged_rows:
                 meta = _safe_load_json(metadata)
                 meta["distance"] = float(distance)
+                meta["retrieval_match"] = "semantic" if _doc_dedupe_key(content, metadata) in semantic_seen else "keyword"
                 docs.append(Document(page_content=content, metadata=meta))
             return docs
 
@@ -154,6 +284,7 @@ class EnhancedFlashrankRerankRetriever(BaseRetriever):
         # 2) Apply domain-specific boosts (soft + capped)
         boosted: List[Tuple[float, Document]] = []
         q_tokens = (query or "").lower().split()
+        q_keywords = _extract_query_keywords(query, max_terms=12)
         query_upper = (query or "").upper()
         
         # Extract error/event codes from query (pattern: letter + numbers + H, e.g., F800H, 9801H)
@@ -176,6 +307,9 @@ class EnhancedFlashrankRerankRetriever(BaseRetriever):
                 bonus += 0.10
             if any(tok in text_low for tok in q_tokens if tok and len(tok) > 2):
                 bonus += 0.20
+            keyword_hits = sum(1 for kw in q_keywords if kw in text_low)
+            if keyword_hits > 0:
+                bonus += min(0.60, keyword_hits * 0.12)
             proto_hits = sum(1 for t in self._PROTO_TERMS if t in text_low)
             if proto_hits > 0:
                 bonus += min(0.30, proto_hits * 0.08)  # cap 0.30

@@ -165,7 +165,8 @@ def _run_chat_generation(
     collection: str,
     chat_history: list,
 ) -> Dict[str, Any]:
-    use_rerank = _env_bool("CHAT_USE_RERANK", False)
+    use_rerank_default = _env_bool("USE_RERANK_DEFAULT", True)
+    use_rerank = _env_bool("CHAT_USE_RERANK", use_rerank_default)
     reranker_cls = EnhancedFlashrankRerankRetriever if use_rerank else NoRerankRetriever
 
     if embedder is not None:

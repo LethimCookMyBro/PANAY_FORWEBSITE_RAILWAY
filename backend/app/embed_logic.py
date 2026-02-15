@@ -411,6 +411,63 @@ def extract_tables_and_prose(text: str) -> tuple[List[str], str]:
     return tables, prose
 
 
+_SECTION_HEADER_PATTERNS = (
+    re.compile(r"^\s*\d+(?:\.\d+){1,4}\s+[A-Za-z][^\n]{2,140}$"),
+    re.compile(r"^\s*(?:chapter|section)\s+\d+(?:\.\d+){0,4}\s*[:\-]?\s+[A-Za-z][^\n]{2,140}$", re.IGNORECASE),
+    re.compile(r"^\s*[A-Z][A-Z0-9 /\-]{5,80}$"),
+)
+
+
+def _is_section_header(line: str) -> bool:
+    text = (line or "").strip()
+    if len(text) < 4 or len(text) > 160:
+        return False
+    if text.endswith(":"):
+        text = text[:-1].strip()
+    return any(pattern.match(text) for pattern in _SECTION_HEADER_PATTERNS)
+
+
+def split_prose_by_sections(text: str) -> List[tuple[str, str]]:
+    """
+    Split prose into section-aware blocks using heading-like lines.
+    Falls back to a single section when no heading is detected.
+    """
+    lines = [ln.rstrip() for ln in (text or "").splitlines()]
+    if not lines:
+        return []
+
+    sections: List[tuple[str, str]] = []
+    current_title = "General"
+    buffer: List[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            if buffer and buffer[-1] != "":
+                buffer.append("")
+            continue
+
+        if _is_section_header(stripped):
+            if buffer:
+                body = "\n".join(buffer).strip()
+                if body:
+                    sections.append((current_title, body))
+            current_title = stripped
+            buffer = [stripped]
+            continue
+
+        buffer.append(stripped)
+
+    if buffer:
+        body = "\n".join(buffer).strip()
+        if body:
+            sections.append((current_title, body))
+
+    if not sections and text.strip():
+        return [("General", text.strip())]
+    return sections
+
+
 def create_pdf_chunks(
     docs: List[Document],
     chunk_size: int = 800,
@@ -513,23 +570,35 @@ def create_pdf_chunks(
         # Process remaining prose content
         prose_content = clean_text(prose_content)
         
-        # Create prose chunks
+        # Section-aware prose chunking to preserve multi-step procedures.
         if prose_content and len(prose_content.strip()) > 50:
-            prose_chunks = text_splitter.create_documents([prose_content])
-            for chunk in prose_chunks:
-                # Prepend file label to chunk content
-                labeled_content = f"{file_label}: {chunk.page_content}"
-                chunk.page_content = labeled_content
-                prose_meta = {"source": os.path.basename(source), "page": page_number, "chunk_type": "prose"}
-                if extra_metadata:
-                    prose_meta.update(extra_metadata)
-                chunk.metadata = enhance_metadata(prose_meta, labeled_content)
-                # Apply filtering
-                is_valid, reason = is_valid_chunk(chunk)
-                if is_valid:
-                    all_chunks.append(chunk)
-                else:
-                    filtered_count += 1
+            sections = split_prose_by_sections(prose_content)
+            if not sections:
+                sections = [("General", prose_content)]
+
+            for section_title, section_body in sections:
+                if not section_body or len(section_body.strip()) < 30:
+                    continue
+                section_docs = text_splitter.create_documents([section_body])
+                for chunk in section_docs:
+                    labeled_content = (
+                        f"{file_label}: [Section: {section_title}] {chunk.page_content}"
+                    )
+                    chunk.page_content = labeled_content
+                    prose_meta = {
+                        "source": os.path.basename(source),
+                        "page": page_number,
+                        "chunk_type": "prose_section",
+                        "section_title": section_title,
+                    }
+                    if extra_metadata:
+                        prose_meta.update(extra_metadata)
+                    chunk.metadata = enhance_metadata(prose_meta, labeled_content)
+                    is_valid, reason = is_valid_chunk(chunk)
+                    if is_valid:
+                        all_chunks.append(chunk)
+                    else:
+                        filtered_count += 1
 
     logging.info(f"✅ Created {len(all_chunks)} chunks (filtered out {filtered_count} trash chunks)")
     return all_chunks
@@ -565,6 +634,7 @@ def get_embedding_instruction(chunk_type: str) -> str:
         "golden_qa": "Represent this authoritative question-answer pair for search: ",
         "spec_pair": "Represent this technical specification value for search: ",
         "table": "Represent this technical data table for search: ",
+        "prose_section": "Represent this technical procedure section for search: ",
         "prose": "Represent this technical documentation paragraph for search: "
     }
     return instructions.get(chunk_type, "Represent this sentence for searching relevant passages: ")

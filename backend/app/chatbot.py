@@ -19,14 +19,17 @@ logger = logging.getLogger(__name__)
 # CONFIGURATION
 # ============================================================
 
-FINAL_K = 3
 MIN_KEEP = 2
 ALPHA = 0.6
 HARD_MIN = 0.10
 SOFT_MIN = 0.15
-MAX_CANDIDATES = 5
-PROCEDURE_FINAL_K = 6
-PROCEDURE_MAX_CANDIDATES = 12
+
+DEFAULT_QA_TOPK = 4
+DEFAULT_PROCEDURE_TOPK = 8
+DEFAULT_QA_RERANK_TOPN = 5
+DEFAULT_PROCEDURE_RERANK_TOPN = 10
+DEFAULT_QA_MAX_CANDIDATES = 8
+DEFAULT_PROCEDURE_MAX_CANDIDATES = 14
 
 # RAGAS quality threshold - if average score below this, respond "I don't know"
 RAGAS_MIN_THRESHOLD = 0.40  # 40% minimum average quality
@@ -101,17 +104,38 @@ _PROMPT_LEAK_PATTERNS = (
     r"\[Source:\s*[^\]\|]+\s*\|\s*Page:\s*[^\]]+\]",
 )
 
-RESPONSE_SECTION_HEADERS = [
-    "[APPLICABLE HARDWARE]",
-    "[ENGINEERING SOFTWARE]",
-    "[PRECONDITIONS]",
-    "[PARAMETER SETTINGS]",
-    "[CONFIGURATION PROCEDURE]",
-    "[DOWNLOAD / APPLY]",
-    "[VERIFICATION]",
-    "[COMMON FAULTS]",
-    "[NOTES]",
-]
+PROCEDURE_BUCKET_ORDER = (
+    "hardware_mode",
+    "network",
+    "station",
+    "refresh",
+    "write",
+    "reset",
+    "diagnostic",
+    "other",
+)
+
+PROCEDURE_BUCKET_HINTS = {
+    "hardware_mode": ("hardware", "cpu", "module", "mode", "plc mode"),
+    "network": ("network", "ethernet", "cc-link", "cc link", "profinet", "ip address"),
+    "station": ("station", "node", "slave", "master", "parameter"),
+    "refresh": ("refresh", "cyclic", "link refresh", "mapping"),
+    "write": ("write", "download", "apply", "save", "write to plc"),
+    "reset": ("reset", "power cycle", "reboot", "restart"),
+    "diagnostic": ("diagnostic", "monitor", "verify", "led", "buffer memory", "error"),
+}
+
+PARAMETER_VALUE_HINTS = (
+    "parameter",
+    "station",
+    "address",
+    "refresh",
+    "register",
+    "setting",
+    "timer",
+    "value",
+    "baud",
+)
 
 
 def _looks_broken_reply(text: Any) -> bool:
@@ -171,20 +195,19 @@ def _build_task_prompt(question: str, mode: str) -> str:
         return (
             "TASK: PLC_TROUBLESHOOT\n\n"
             f"Observed symptom:\n{question}\n\n"
-            "Provide:\n"
-            "- Meaning\n"
-            "- Root cause\n"
-            "- Inspection steps\n"
-            "- Exact diagnostic location\n"
-            "- Recovery procedure\n\n"
-            "No theory explanation allowed."
+            "Requirements:\n"
+            "- Combine related troubleshooting steps across multiple manual sections\n"
+            "- Keep only executable inspection/recovery actions\n"
+            "- Do not invent numeric parameter values not present in context\n"
+            "- If multiple model variants appear, label them clearly"
         )
     if mode == "procedure":
         return (
             "TASK: PLC_CONFIGURATION\n\n"
             f"Question:\n{question}\n\n"
             "Constraints:\n"
-            "- Answer only using manuals\n"
+            "- Combine related configuration steps across multiple sections into a single executable procedure\n"
+            "- Do not invent numeric parameter values not present in context\n"
             "- If model differs, separate sections\n"
             "- No generic explanation"
         )
@@ -193,6 +216,7 @@ def _build_task_prompt(question: str, mode: str) -> str:
         f"Question:\n{question}\n\n"
         "Constraints:\n"
         "- Answer only using manuals\n"
+        "- Do not invent numeric parameter values not present in context\n"
         "- No generic explanation"
     )
 
@@ -212,6 +236,34 @@ def _env_int(key: str, default: int) -> int:
         return int(str(raw).strip())
     except Exception:
         return default
+
+
+def _clamp_int(value: int, low: int, high: int) -> int:
+    return max(low, min(high, value))
+
+
+def _topk_for_mode(mode: str) -> int:
+    if mode in {"procedure", "troubleshoot"}:
+        value = _env_int("CHAT_TOPK_PROCEDURE", DEFAULT_PROCEDURE_TOPK)
+        return _clamp_int(value, 6, 10)
+    value = _env_int("CHAT_TOPK_QA", DEFAULT_QA_TOPK)
+    return _clamp_int(value, 3, 5)
+
+
+def _rerank_topn_for_mode(mode: str) -> int:
+    if mode in {"procedure", "troubleshoot"}:
+        value = _env_int("CHAT_RERANK_TOPN_PROCEDURE", DEFAULT_PROCEDURE_RERANK_TOPN)
+        return _clamp_int(value, 6, 12)
+    value = _env_int("CHAT_RERANK_TOPN_QA", DEFAULT_QA_RERANK_TOPN)
+    return _clamp_int(value, 3, 8)
+
+
+def _max_candidates_for_mode(mode: str) -> int:
+    if mode in {"procedure", "troubleshoot"}:
+        value = _env_int("CHAT_MAX_CANDIDATES_PROCEDURE", DEFAULT_PROCEDURE_MAX_CANDIDATES)
+        return _clamp_int(value, 8, 20)
+    value = _env_int("CHAT_MAX_CANDIDATES_QA", DEFAULT_QA_MAX_CANDIDATES)
+    return _clamp_int(value, 5, 12)
 
 
 def _normalize_ollama_base_url(raw_url: str) -> str:
@@ -626,58 +678,97 @@ def _compact_context_text(text: str, max_chars: int) -> str:
     return compact
 
 
-def _format_enforced_response(raw: str) -> str:
+def _extract_candidate_steps(text: str) -> List[str]:
+    candidates: List[str] = []
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if re.match(r"(?i)^sources?\s*:", line):
+            break
+        line = re.sub(r"^\d+[.)]\s*", "", line)
+        line = re.sub(r"^[-*]\s*", "", line)
+        if len(line) < 8:
+            continue
+        candidates.append(line)
+    return candidates
+
+
+def _step_bucket(step_text: str) -> str:
+    low = (step_text or "").lower()
+    for bucket in PROCEDURE_BUCKET_ORDER:
+        if bucket == "other":
+            continue
+        hints = PROCEDURE_BUCKET_HINTS.get(bucket, ())
+        if any(h in low for h in hints):
+            return bucket
+    return "other"
+
+
+def _normalize_engineering_steps(raw: str, mode: str) -> str:
     text = (raw or "").strip()
-    if all(h in text for h in RESPONSE_SECTION_HEADERS):
+    if mode not in {"procedure", "troubleshoot"}:
         return text
 
-    steps = []
-    for ln in text.splitlines():
-        s = ln.strip()
-        if re.match(r"^\d+[.)]\s+", s):
-            steps.append(re.sub(r"^\d+[.)]\s*", "", s))
-    while len(steps) < 3:
-        steps.append("NOT FOUND IN MANUAL")
+    steps = _extract_candidate_steps(text)
+    if not steps:
+        return text
 
-    return (
-        "[APPLICABLE HARDWARE]\n"
-        "CPU Module: NOT FOUND IN MANUAL\n"
-        "Network Module: NOT FOUND IN MANUAL\n"
-        "Series: NOT FOUND IN MANUAL\n\n"
-        "[ENGINEERING SOFTWARE]\n"
-        "Software: NOT FOUND IN MANUAL\n"
-        "Menu Path: NOT FOUND IN MANUAL\n\n"
-        "[PRECONDITIONS]\n"
-        "- PLC Mode: NOT FOUND IN MANUAL\n"
-        "- Wiring condition: NOT FOUND IN MANUAL\n"
-        "- Network state: NOT FOUND IN MANUAL\n\n"
-        "[PARAMETER SETTINGS]\n"
-        "| Parameter | Location | Range | Default | Required Value | Source Page |\n"
-        "|---------|-------|------|------|------|------|\n"
-        "| NOT FOUND IN MANUAL | NOT FOUND IN MANUAL | NOT FOUND IN MANUAL | NOT FOUND IN MANUAL | NOT FOUND IN MANUAL | NOT FOUND IN MANUAL |\n\n"
-        "[CONFIGURATION PROCEDURE]\n"
-        f"1. {steps[0]}\n"
-        f"2. {steps[1]}\n"
-        f"3. {steps[2]}\n\n"
-        "[DOWNLOAD / APPLY]\n"
-        "- Write to PLC: NOT FOUND IN MANUAL\n"
-        "- Power cycle required: NOT FOUND IN MANUAL\n"
-        "- Reset required: NOT FOUND IN MANUAL\n\n"
-        "[VERIFICATION]\n"
-        "- Expected LED status: NOT FOUND IN MANUAL\n"
-        "- Expected buffer memory: NOT FOUND IN MANUAL\n"
-        "- Online diagnostic location: NOT FOUND IN MANUAL\n\n"
-        "[COMMON FAULTS]\n"
-        "| Symptom | Cause | Fix | Source Page |\n"
-        "|---------|------|-----|------------|\n"
-        "| NOT FOUND IN MANUAL | NOT FOUND IN MANUAL | NOT FOUND IN MANUAL | NOT FOUND IN MANUAL |\n\n"
-        "[NOTES]\n"
-        "Only include safety-critical or version-specific notes\n"
-        "NOT FOUND IN MANUAL"
-    )
+    seen = set()
+    buckets: Dict[str, List[str]] = {name: [] for name in PROCEDURE_BUCKET_ORDER}
+    for step in steps:
+        norm = re.sub(r"\W+", " ", step.lower()).strip()
+        if not norm or norm in seen:
+            continue
+        seen.add(norm)
+        buckets[_step_bucket(step)].append(step)
+
+    ordered_steps: List[str] = []
+    for bucket in PROCEDURE_BUCKET_ORDER:
+        ordered_steps.extend(buckets.get(bucket, []))
+
+    if len(ordered_steps) < 2:
+        return text
+
+    return "\n".join(f"{idx}. {step}" for idx, step in enumerate(ordered_steps, start=1))
 
 
-def _select_default_context_docs(retrieved_docs: List, max_candidates: int = MAX_CANDIDATES) -> List:
+def _enforce_numeric_guardrail(text: str, context_texts: List[str], mode: str) -> str:
+    if mode not in {"procedure", "troubleshoot"}:
+        return text
+    if not text or not context_texts:
+        return text
+
+    context_lower = "\n".join(context_texts).lower()
+    masked = False
+    safe_lines: List[str] = []
+    for raw in text.splitlines():
+        line = raw
+        content = re.sub(r"^\d+[.)]\s*", "", raw).strip()
+        low = content.lower()
+        if any(hint in low for hint in PARAMETER_VALUE_HINTS):
+            tokens = re.findall(r"\b[A-Za-z]*\d+[A-Za-z0-9./:-]*\b", content)
+            unknown_tokens = [tok for tok in tokens if tok.lower() not in context_lower]
+            if unknown_tokens:
+                masked = True
+                for tok in unknown_tokens[:10]:
+                    line = re.sub(rf"\b{re.escape(tok)}\b", "<verify-in-manual>", line)
+        safe_lines.append(line)
+
+    guarded = "\n".join(safe_lines).strip()
+    if masked:
+        guarded += (
+            "\n\nNote: Some numeric values were masked because they were not found in retrieved manual context."
+        )
+    return guarded
+
+
+def _select_default_context_docs(
+    retrieved_docs: List,
+    *,
+    top_k: int,
+    max_candidates: int,
+) -> List:
     candidates = (retrieved_docs or [])[:max_candidates]
     if not candidates:
         return []
@@ -698,12 +789,17 @@ def _select_default_context_docs(retrieved_docs: List, max_candidates: int = MAX
             continue
         seen.add(key)
         final_docs.append(doc)
-        if len(final_docs) >= FINAL_K:
+        if len(final_docs) >= top_k:
             break
     return final_docs
 
 
-def _select_procedure_context_docs(retrieved_docs: List, max_candidates: int = PROCEDURE_MAX_CANDIDATES) -> List:
+def _select_procedure_context_docs(
+    retrieved_docs: List,
+    *,
+    top_k: int,
+    max_candidates: int,
+) -> List:
     candidates = (retrieved_docs or [])[:max_candidates]
     if not candidates:
         return []
@@ -771,7 +867,7 @@ def _select_procedure_context_docs(retrieved_docs: List, max_candidates: int = P
             continue
         seen.add(key)
         final_docs.append(doc)
-        if len(final_docs) >= PROCEDURE_FINAL_K:
+        if len(final_docs) >= top_k:
             return final_docs
 
     for doc, _ in other_docs:
@@ -780,7 +876,7 @@ def _select_procedure_context_docs(retrieved_docs: List, max_candidates: int = P
             continue
         seen.add(key)
         final_docs.append(doc)
-        if len(final_docs) >= PROCEDURE_FINAL_K:
+        if len(final_docs) >= top_k:
             break
 
     return final_docs
@@ -790,14 +886,25 @@ def select_context_docs(
     retrieved_docs: List,
     question: str = "",
     question_mode: str = "qa",
-    max_candidates: int = MAX_CANDIDATES,
+    top_k: Optional[int] = None,
+    max_candidates: Optional[int] = None,
 ) -> List:
     mode = (question_mode or _question_mode(question)).strip().lower()
+    top_k = top_k or _topk_for_mode(mode)
+    max_candidates = max_candidates or _max_candidates_for_mode(mode)
     if mode in {"procedure", "troubleshoot"}:
-        docs = _select_procedure_context_docs(retrieved_docs, max_candidates=PROCEDURE_MAX_CANDIDATES)
+        docs = _select_procedure_context_docs(
+            retrieved_docs,
+            top_k=top_k,
+            max_candidates=max_candidates,
+        )
         if docs:
             return docs
-    return _select_default_context_docs(retrieved_docs, max_candidates=max_candidates)
+    return _select_default_context_docs(
+        retrieved_docs,
+        top_k=top_k,
+        max_candidates=max_candidates,
+    )
 
 
 # ============================================================
@@ -877,67 +984,24 @@ def preprocess_query(query: str) -> str:
 def build_enhanced_prompt() -> PromptTemplate:
     template = """You are an industrial PLC field engineer.
 
-Your goal is NOT to summarize documents.
-Your goal is to produce an engineering procedure that can be executed on a real machine.
+Use only MANUAL CONTEXT below.
+Do not output retrieval/debug text.
+Do not invent numeric parameter values (addresses, station numbers, timers, register values) unless explicitly present in context.
+Never merge instructions across incompatible PLC models without labeling model differences.
 
-Rules:
-- If information is missing -> say "NOT FOUND IN MANUAL"
-- Never guess parameter values
-- Never generalize across different PLC series
-- Always bind instructions to a specific model/tool when available
-- Remove any retrieval/debug text
-- Prefer tables over paragraphs
-- The answer must be actionable
+Core synthesis rule:
+Combine related configuration steps across multiple sections into a single executable procedure.
 
-Every answer must follow the RESPONSE FORMAT strictly.
-If you cannot fill a field, write: NOT FOUND IN MANUAL
+Output policy:
+- If QUESTION_MODE is procedure/troubleshoot: return an ordered engineering procedure as numbered steps.
+- If QUESTION_MODE is qa: answer directly, then add short actionable steps only when useful.
+- If key info is missing after using all context, say exactly what is missing and continue with remaining verified steps.
 
 {history_section}MANUAL CONTEXT:
 {context}
 
 USER TASK TEMPLATE:
 {task_prompt}
-
-RESPONSE FORMAT (use this exact structure and order):
-[APPLICABLE HARDWARE]
-CPU Module:
-Network Module:
-Series:
-
-[ENGINEERING SOFTWARE]
-Software:
-Menu Path:
-
-[PRECONDITIONS]
-- PLC Mode:
-- Wiring condition:
-- Network state:
-
-[PARAMETER SETTINGS]
-| Parameter | Location | Range | Default | Required Value | Source Page |
-|---------|-------|------|------|------|------|
-
-[CONFIGURATION PROCEDURE]
-1.
-2.
-3.
-
-[DOWNLOAD / APPLY]
-- Write to PLC:
-- Power cycle required:
-- Reset required:
-
-[VERIFICATION]
-- Expected LED status:
-- Expected buffer memory:
-- Online diagnostic location:
-
-[COMMON FAULTS]
-| Symptom | Cause | Fix | Source Page |
-|---------|------|-----|------------|
-
-[NOTES]
-Only include safety-critical or version-specific notes
 
 QUESTION_MODE: {question_mode}
 CURRENT QUESTION:
@@ -953,53 +1017,12 @@ ANSWER:"""
 def build_no_context_prompt() -> PromptTemplate:
     template = """You are an industrial PLC field engineer.
 
-No relevant manual pages were retrieved.
+No reliable manual context was retrieved for this question.
 
-You must still return the exact RESPONSE FORMAT below.
-Every unknown field must be: NOT FOUND IN MANUAL
-
-[APPLICABLE HARDWARE]
-CPU Module: NOT FOUND IN MANUAL
-Network Module: NOT FOUND IN MANUAL
-Series: NOT FOUND IN MANUAL
-
-[ENGINEERING SOFTWARE]
-Software: NOT FOUND IN MANUAL
-Menu Path: NOT FOUND IN MANUAL
-
-[PRECONDITIONS]
-- PLC Mode: NOT FOUND IN MANUAL
-- Wiring condition: NOT FOUND IN MANUAL
-- Network state: NOT FOUND IN MANUAL
-
-[PARAMETER SETTINGS]
-| Parameter | Location | Range | Default | Required Value | Source Page |
-|---------|-------|------|------|------|------|
-| NOT FOUND IN MANUAL | NOT FOUND IN MANUAL | NOT FOUND IN MANUAL | NOT FOUND IN MANUAL | NOT FOUND IN MANUAL | NOT FOUND IN MANUAL |
-
-[CONFIGURATION PROCEDURE]
-1. NOT FOUND IN MANUAL
-2. NOT FOUND IN MANUAL
-3. NOT FOUND IN MANUAL
-
-[DOWNLOAD / APPLY]
-- Write to PLC: NOT FOUND IN MANUAL
-- Power cycle required: NOT FOUND IN MANUAL
-- Reset required: NOT FOUND IN MANUAL
-
-[VERIFICATION]
-- Expected LED status: NOT FOUND IN MANUAL
-- Expected buffer memory: NOT FOUND IN MANUAL
-- Online diagnostic location: NOT FOUND IN MANUAL
-
-[COMMON FAULTS]
-| Symptom | Cause | Fix | Source Page |
-|---------|------|-----|------------|
-| NOT FOUND IN MANUAL | NOT FOUND IN MANUAL | NOT FOUND IN MANUAL | NOT FOUND IN MANUAL |
-
-[NOTES]
-Only include safety-critical or version-specific notes
-NOT FOUND IN MANUAL
+Respond with:
+1. A brief limitation statement.
+2. What exact manual details are missing (model, parameter section, page, or error code table).
+3. The best next query the user should ask to retrieve the correct section.
 
 QUESTION:
 {question}
@@ -1086,6 +1109,9 @@ def answer_question(
 
     # ============ RETRIEVAL PHASE ============
     t_retrieval_start = time.perf_counter()
+    rerank_top_n = _rerank_topn_for_mode(question_mode)
+    selected_top_k = _topk_for_mode(question_mode)
+    max_candidates = _max_candidates_for_mode(question_mode)
     
     base_retriever = retriever_class(
         connection_pool=db_pool,
@@ -1101,19 +1127,28 @@ def answer_question(
     # ============ RERANKING PHASE ============
     t_rerank_start = time.perf_counter()
     
-    try:
-        reranker = reranker_class(
-            base_retriever=base_retriever,
-            prefetched_docs=raw_retrieved_docs,
-        )
-    except TypeError:
-        # Backward compatibility for custom rerankers without prefetched_docs.
-        reranker = reranker_class(base_retriever=base_retriever)
+    reranker = None
+    for kwargs in (
+        {"base_retriever": base_retriever, "prefetched_docs": raw_retrieved_docs, "top_n": rerank_top_n},
+        {"base_retriever": base_retriever, "prefetched_docs": raw_retrieved_docs},
+        {"base_retriever": base_retriever, "top_n": rerank_top_n},
+        {"base_retriever": base_retriever},
+    ):
+        try:
+            reranker = reranker_class(**kwargs)
+            break
+        except TypeError:
+            continue
+    if reranker is None:
+        raise RuntimeError("Failed to initialize reranker with compatible arguments")
+
     retrieved_docs = reranker.invoke(processed_msg) or []
     selected_docs = select_context_docs(
         retrieved_docs,
         question=processed_msg,
         question_mode=question_mode,
+        top_k=selected_top_k,
+        max_candidates=max_candidates,
     )
     
     t_rerank_end = time.perf_counter()
@@ -1137,11 +1172,6 @@ def answer_question(
     # ============ LLM PHASE ============
     t_llm_start = time.perf_counter()
     reply = None
-
-    if not context_texts and question_mode in {"procedure", "troubleshoot"}:
-        # For strict manual-only modes, return deterministic template immediately
-        # when no actionable manual chunks are available.
-        reply = _format_enforced_response("")
 
     if reply is None and context_texts:
         context_headers = []
@@ -1190,7 +1220,8 @@ def answer_question(
 
     reply = fix_markdown_tables(str(reply))  # Fix malformed markdown tables
     reply = _sanitize_prompt_leakage(reply)
-    reply = _format_enforced_response(reply)
+    reply = _normalize_engineering_steps(reply, question_mode)
+    reply = _enforce_numeric_guardrail(reply, context_texts, question_mode)
     if _looks_broken_reply(reply):
         logger.warning("⚠️ Broken/empty LLM reply detected. Replacing with safe fallback.")
         reply = (
