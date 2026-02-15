@@ -333,6 +333,17 @@ def get_doc_score(doc) -> Optional[float]:
         score = metadata.get("score") or metadata.get("relevance_score")
         if score is not None:
             return normalize_score(score)
+        # No-rerank fallback: pgvector returns L2 distance in metadata["distance"].
+        # Convert distance (lower is better) to a bounded similarity-like score.
+        distance = metadata.get("distance")
+        if distance is not None:
+            try:
+                dist_val = float(distance)
+                if math.isfinite(dist_val):
+                    dist_val = max(0.0, dist_val)
+                    return 1.0 / (1.0 + dist_val)
+            except Exception:
+                pass
     return None
 
 
