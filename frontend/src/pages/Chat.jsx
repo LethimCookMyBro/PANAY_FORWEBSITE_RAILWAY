@@ -750,6 +750,36 @@ export default function Chat({ onLogout }) {
     }
   };
 
+  const openSourceDocument = useCallback(async (sourceItem) => {
+    const source = String(sourceItem?.source || "").trim();
+    if (!source) return;
+
+    const page = normalizePageNumber(sourceItem?.page);
+    const isPdf = source.toLowerCase().endsWith(".pdf");
+    const endpoint = `/api/chat/sources/${encodeURIComponent(source)}`;
+
+    try {
+      const response = await api.get(endpoint, { responseType: "blob" });
+      const blob = response?.data;
+      if (!(blob instanceof Blob)) {
+        throw new Error("Invalid source response");
+      }
+
+      const objectUrl = URL.createObjectURL(blob);
+      const targetUrl = isPdf && page > 0 ? `${objectUrl}#page=${page}` : objectUrl;
+      const opened = window.open(targetUrl, "_blank", "noopener,noreferrer");
+      if (!opened) {
+        window.location.href = targetUrl;
+      }
+
+      // Keep URL alive long enough for built-in PDF viewer lazy reads.
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 10 * 60 * 1000);
+    } catch (err) {
+      console.error("Open source failed", err);
+      setApiError(getApiErrorMessage(err, "Failed to open source document"));
+    }
+  }, [setApiError]);
+
   /* ---- input bar (shared between centered & bottom) ---- */
   const renderInputBar = (centered = false) => (
     <form
@@ -1191,13 +1221,16 @@ export default function Chat({ onLogout }) {
                               const label = formatSourceItemLabel(sourceItem);
                               if (!label) return null;
                               return (
-                                <span
+                                <button
+                                  type="button"
                                   key={`${m.id || i}-src-${sourceIndex}`}
-                                  className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 text-blue-700 border border-blue-100 px-2.5 py-1 text-[11px] font-medium"
+                                  onClick={() => openSourceDocument(sourceItem)}
+                                  className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 text-blue-700 border border-blue-100 px-2.5 py-1 text-[11px] font-medium hover:bg-blue-100 hover:border-blue-200 transition-colors cursor-pointer"
+                                  title="Open source document"
                                 >
                                   <FileText size={12} />
                                   {label}
-                                </span>
+                                </button>
                               );
                             })}
                           </div>

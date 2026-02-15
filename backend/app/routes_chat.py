@@ -1,9 +1,11 @@
 import logging
 import os
 import requests
+import mimetypes
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Any, Dict, Optional
 
@@ -29,6 +31,14 @@ from app.utils import get_llm
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 logger = logging.getLogger(__name__)
+
+_KNOWLEDGE_DIR_CANDIDATES = (
+    "/data/Knowledge",
+    "/app/data/Knowledge",
+    "/app/backend/data/Knowledge",
+    "data/Knowledge",
+    "backend/data/Knowledge",
+)
 
 
 def _env_bool(key: str, default: bool = False) -> bool:
@@ -179,6 +189,72 @@ def _run_chat_generation(
         "context_count": 0,
         "max_score": None,
     }
+
+
+def _iter_knowledge_roots():
+    seen = set()
+    preferred = (os.getenv("KNOWLEDGE_DIR", "") or "").strip()
+    candidates = [preferred] if preferred else []
+    candidates.extend(_KNOWLEDGE_DIR_CANDIDATES)
+
+    for root in candidates:
+        if not root:
+            continue
+        abs_root = os.path.abspath(root)
+        if abs_root in seen:
+            continue
+        seen.add(abs_root)
+        if os.path.isdir(abs_root):
+            yield abs_root
+
+
+def _is_within_root(path: str, root: str) -> bool:
+    try:
+        common = os.path.commonpath([os.path.realpath(path), os.path.realpath(root)])
+        return common == os.path.realpath(root)
+    except Exception:
+        return False
+
+
+def _resolve_source_file_path(source_name: str) -> Optional[str]:
+    raw = (source_name or "").strip()
+    if not raw:
+        return None
+
+    # Guard against traversal while still allowing stored relative source paths.
+    normalized_rel = raw.replace("\\", "/").lstrip("/")
+    if normalized_rel.startswith(".."):
+        normalized_rel = os.path.basename(normalized_rel)
+    basename = os.path.basename(normalized_rel)
+    if not basename:
+        return None
+
+    for root in _iter_knowledge_roots():
+        # 1) exact relative path match (if metadata stored a relative source key)
+        if normalized_rel:
+            candidate = os.path.realpath(os.path.join(root, normalized_rel))
+            if _is_within_root(candidate, root) and os.path.isfile(candidate):
+                return candidate
+
+        # 2) direct basename match under root
+        direct = os.path.realpath(os.path.join(root, basename))
+        if _is_within_root(direct, root) and os.path.isfile(direct):
+            return direct
+
+        # 3) recursive basename match (fallback)
+        fallback_ci = None
+        for dirpath, _, filenames in os.walk(root):
+            if basename in filenames:
+                return os.path.realpath(os.path.join(dirpath, basename))
+            if fallback_ci is None:
+                for filename in filenames:
+                    if filename.lower() == basename.lower():
+                        fallback_ci = os.path.realpath(os.path.join(dirpath, filename))
+                        break
+        if fallback_ci:
+            return fallback_ci
+
+    return None
 
 
 # =========================
@@ -505,3 +581,27 @@ def get_messages(
         "has_more": result["has_more"],
         "items": result["items"],
     }
+
+
+@router.get("/sources/{source_name:path}")
+def get_source_file(
+    source_name: str,
+    current_user: dict = Depends(get_current_user),
+):
+    _ = current_user  # Keep auth protection while serving files.
+
+    resolved_path = _resolve_source_file_path(source_name)
+    if not resolved_path:
+        raise HTTPException(status_code=404, detail="Source file not found")
+
+    filename = os.path.basename(resolved_path)
+    media_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    headers = {
+        "Content-Disposition": f'inline; filename="{filename}"',
+        "Cache-Control": "private, max-age=300",
+    }
+    return FileResponse(
+        path=resolved_path,
+        media_type=media_type,
+        headers=headers,
+    )
