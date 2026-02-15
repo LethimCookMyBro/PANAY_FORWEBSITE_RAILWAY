@@ -682,6 +682,12 @@ export default function Chat({ onLogout }) {
       setChatHistory((p) => p.filter((c) => c.id !== normalizedId));
       if (activeChatId === normalizedId) handleNewChat();
     } catch (err) {
+      if (err?.response?.status === 404) {
+        // Idempotent UX: treat already-deleted session as success.
+        setChatHistory((p) => p.filter((c) => c.id !== normalizedId));
+        if (activeChatId === normalizedId) handleNewChat();
+        return;
+      }
       console.error("Delete failed", err);
       setApiError(getApiErrorMessage(err, "Failed to delete chat"));
     }

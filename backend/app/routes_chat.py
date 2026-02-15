@@ -463,7 +463,11 @@ def delete_chat_session_route(
     )
 
     if not deleted:
-        raise HTTPException(status_code=404, detail="Chat session not found")
+        return {
+            "success": True,
+            "session_id": session_id,
+            "already_deleted": True,
+        }
 
     return {
         "success": True,

@@ -1,50 +1,99 @@
+############################################
+# OS / Editor
+############################################
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+############################################
 # Node / Frontend
+############################################
 node_modules/
 frontend/dist/
 .vite/
+dist/
+build/
 
-# Python / Backend
+############################################
+# Python
+############################################
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyo
+*.pyd
+*.so
 venv/
+.venv/
 .env
+.env.*
 *.sqlite
-
-# Downloaded models cache - บรรทัดนี้สำคัญที่สุด
-models/
-
-# Data files (PDFs, documents for embedding)
-data/*
-!data/Knowledge/
-!data/Knowledge/**
-
-# Docker
-*.log
-*.pid
-*.sock
 *.db
-docker-volumes/
-ollama/
 
-# VSCode - keep settings.json for consistent linting
+############################################
+# Models / ML / RAG (สำคัญมาก)
+############################################
 
-# OS
-.DS_Store
-Thumbs.db
-nvidia-smi
-# Local caches / ingest state
-.ingest/
+# โฟลเดอร์ models ทุกตำแหน่ง
+models/
+**/models/
 .models/
-**/.locks/
-*.lock
+**/.models/
 
-# Model weights / big artifacts
+# HuggingFace / Torch cache
+.cache/
+**/.cache/
+.huggingface/
+**/.huggingface/
+hf/
+**/hf/
+torch/
+**/torch/
+
+# Embedding / ingest state
+.ingest/
+**/.ingest/
+state.json
+*.lock
+**/*.lock
+
+# Model weight files
 *.safetensors
 *.bin
 *.pt
 *.pth
 *.onnx
+*.ckpt
 
-# Python junk
-__pycache__/
-*.pyc
+############################################
+# Knowledge / Data
+############################################
+# กัน data ทั้งหมดก่อน
+data/*
+backend/data/*
+
+# อนุญาตเฉพาะ Knowledge ที่ต้องใช้จริง
+!data/Knowledge/
+!data/Knowledge/**
+!backend/data/Knowledge/
+!backend/data/Knowledge/**
+
+############################################
+# Docker / runtime junk
+############################################
+*.log
+*.pid
+*.sock
+docker-volumes/
+ollama/
+tmp/
+temp/
+
+############################################
+# Large archives
+############################################
+*.zip
+*.tar
+*.tar.gz
+*.7z
+*.rar

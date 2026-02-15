@@ -91,7 +91,21 @@ def delete_chat_session(
     conn = db_pool.getconn()
     try:
         with conn.cursor() as cur:
-            # Delete messages first (in case ON DELETE CASCADE is not set)
+            # Verify ownership first to avoid deleting messages from other users.
+            cur.execute(
+                """
+                SELECT 1
+                FROM chat_sessions
+                WHERE id = %s AND user_id = %s
+                FOR UPDATE
+                """,
+                (session_id, user_id),
+            )
+            if cur.fetchone() is None:
+                conn.rollback()
+                return False
+
+            # Delete messages first (kept for compatibility even if CASCADE exists)
             cur.execute(
                 """
                 DELETE FROM chat_messages
