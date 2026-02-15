@@ -2,6 +2,15 @@ export default function ChatWelcome({ user, onPromptSelect, composer }) {
   return (
     <div className="flex-1 flex flex-col items-center justify-center px-4 pb-8">
       <div className="mb-8 text-center fade-in-up">
+        <div className="mb-4 flex justify-center">
+          <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-slate-200 bg-white/85 shadow-sm backdrop-blur">
+            <img
+              src="/panya-logo.png"
+              alt="Panya logo"
+              className="h-10 w-10 object-contain"
+            />
+          </div>
+        </div>
         <div className="inline-flex items-center rounded-full border border-slate-200 bg-white/70 backdrop-blur px-3 py-1.5 text-[11px] font-semibold tracking-wider text-slate-600 uppercase mb-5">
           Industrial Assistant
         </div>
