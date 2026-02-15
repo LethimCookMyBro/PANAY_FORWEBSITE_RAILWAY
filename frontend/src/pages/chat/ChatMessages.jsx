@@ -1,6 +1,7 @@
 import ReactMarkdown from "react-markdown";
 import { Check, Copy, CornerDownLeft, FileText } from "lucide-react";
 import { fixMarkdownTable, markdownComponents } from "./markdown";
+import ThinkingIndicator from "./ThinkingIndicator";
 import { formatSourceItemLabel, formatTime, toArray } from "./utils";
 
 export default function ChatMessages({
@@ -28,16 +29,10 @@ export default function ChatMessages({
             return (
               <div
                 key={message?.id ?? index}
-                className={`flex ${message.sender === "user" ? "justify-end" : "items-start gap-3"} fade-in-up`}
+                className={`flex ${message.sender === "user" ? "justify-end" : "justify-start"} fade-in-up`}
               >
-                {message.sender === "bot" && (
-                  <div className="w-10 h-10 flex items-center justify-center flex-shrink-0 mt-0.5">
-                    <img src="/panya-logo.png" alt="Panya logo" className="w-8 h-8 object-contain" />
-                  </div>
-                )}
-
                 <div
-                  className={`flex flex-col ${message.sender === "user" ? "items-end" : "items-start flex-1 min-w-0"}`}
+                  className={`flex flex-col ${message.sender === "user" ? "items-end" : "items-start max-w-full"}`}
                 >
                   <div
                     className={`max-w-[95%] sm:max-w-[86%] px-4 py-3 rounded-2xl text-[14px] leading-relaxed break-words overflow-hidden ${
@@ -149,18 +144,7 @@ export default function ChatMessages({
           )}
 
           {isLoading && (
-            <div className="flex items-start gap-3 fade-in-up">
-              <div className="w-10 h-10 flex items-center justify-center flex-shrink-0 pulse-glow">
-                <img src="/panya-logo.png" alt="Panya logo" className="w-8 h-8 object-contain" />
-              </div>
-              <div className="bg-white/90 backdrop-blur px-5 py-3.5 rounded-2xl border border-white shadow-md">
-                <div className="flex items-center gap-1.5">
-                  <span className="typing-dot"></span>
-                  <span className="typing-dot"></span>
-                  <span className="typing-dot"></span>
-                </div>
-              </div>
-            </div>
+            <ThinkingIndicator />
           )}
       </div>
     </div>

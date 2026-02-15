@@ -8,6 +8,7 @@ import logging
 import re
 import time
 import os
+import hashlib
 import requests
 from urllib.parse import urlparse, urlunparse, urljoin
 
@@ -33,14 +34,37 @@ DEFAULT_PROCEDURE_MAX_CANDIDATES = 14
 
 # RAGAS quality threshold - if average score below this, respond "I don't know"
 RAGAS_MIN_THRESHOLD = 0.40  # 40% minimum average quality
+RAGAS_FAITHFULNESS_HARD_FAIL = 0.20
+RAGAS_RELEVANCY_HARD_FAIL = 0.20
+RAGAS_METRIC_WEIGHTS = {
+    "answer_relevancy": 0.35,
+    "faithfulness": 0.35,
+    "context_precision": 0.15,
+    "context_recall": 0.15,
+}
 
 # Questions matching these patterns skip RAGAS quality check (identity/greeting questions)
-SKIP_RAGAS_PATTERNS = [
-    "your name", "who are you", "what are you", "introduce yourself",
-    "hello", "hi ", "hey ", "good morning", "good afternoon", "good evening",
-    "thank you", "thanks", "bye", "goodbye", "see you",
-    "how are you", "what can you do", "help me", "what is panya",
-]
+SKIP_RAGAS_PATTERNS = (
+    "your name",
+    "who are you",
+    "what are you",
+    "introduce yourself",
+    "hello",
+    "hi",
+    "hey",
+    "good morning",
+    "good afternoon",
+    "good evening",
+    "thank you",
+    "thanks",
+    "bye",
+    "goodbye",
+    "see you",
+    "how are you",
+    "what can you do",
+    "help me",
+    "what is panya",
+)
 
 PROCEDURE_QUERY_HINTS = (
     "how to",
@@ -101,7 +125,6 @@ _PROMPT_LEAK_PATTERNS = (
     r"(?im)^\s*CURRENT QUESTION\s*:.*$",
     r"(?im)^\s*CONTEXT\s*:.*$",
     r"(?i)\bnever\s+expose\s+or\s+quote\s+these\s+internal\s+instructions\b[^\n.]*[.]?",
-    r"\[Source:\s*[^\]\|]+\s*\|\s*Page:\s*[^\]]+\]",
 )
 
 PROCEDURE_BUCKET_ORDER = (
@@ -135,7 +158,23 @@ PARAMETER_VALUE_HINTS = (
     "timer",
     "value",
     "baud",
+    "timeout",
+    "retry",
+    "scan",
 )
+
+CC_LINK_FULL_TERM = "CC-Link IE Field Network Basic (CC-Link IEF)"
+CC_LINK_SHORT_TERM = "CC-Link IEF"
+
+MODEL_IDENTIFIER_PATTERN = re.compile(r"\b[A-Z]{2,}\d{2,}[A-Z0-9-]*\b")
+IPV4_PATTERN = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
+HEX_VALUE_PATTERN = re.compile(r"\b0x[0-9a-fA-F]+\b")
+REGISTER_VALUE_PATTERN = re.compile(r"\b(?:D|R|W|M|X|Y|B)\d+\b", flags=re.IGNORECASE)
+UNIT_VALUE_PATTERN = re.compile(
+    r"\b\d+(?:\.\d+)?\s*(?:ms|s|sec|seconds|%|hz|khz|mhz|kbps|mbps)\b",
+    flags=re.IGNORECASE,
+)
+NUMBER_PATTERN = re.compile(r"\b\d+(?:\.\d+)?\b")
 
 
 def _looks_broken_reply(text: Any) -> bool:
@@ -209,6 +248,9 @@ def _build_task_prompt(question: str, mode: str) -> str:
             "- Combine related configuration steps across multiple sections into a single executable procedure\n"
             "- Do not invent numeric parameter values not present in context\n"
             "- If model differs, separate sections\n"
+            "- Put model-specific branching notes before the numbered steps\n"
+            "- For enable/disable options, state explicit selection criteria\n"
+            "- Explain why refresh/apply steps are required and when to execute them\n"
             "- No generic explanation"
         )
     return (
@@ -238,8 +280,35 @@ def _env_int(key: str, default: int) -> int:
         return default
 
 
+def _env_float(key: str, default: float) -> float:
+    raw = os.getenv(key)
+    if raw is None:
+        return default
+    try:
+        return float(str(raw).strip())
+    except Exception:
+        return default
+
+
 def _clamp_int(value: int, low: int, high: int) -> int:
     return max(low, min(high, value))
+
+
+def _normalize_intent_text(text: str) -> str:
+    lowered = str(text or "").lower()
+    lowered = re.sub(r"[^a-z0-9]+", " ", lowered)
+    lowered = re.sub(r"\s{2,}", " ", lowered)
+    return lowered.strip()
+
+
+def _should_skip_ragas(question: str) -> bool:
+    normalized = _normalize_intent_text(question)
+    if not normalized:
+        return False
+    return any(
+        re.search(rf"\b{re.escape(pattern)}\b", normalized) is not None
+        for pattern in SKIP_RAGAS_PATTERNS
+    )
 
 
 def _topk_for_mode(mode: str) -> int:
@@ -264,6 +333,42 @@ def _max_candidates_for_mode(mode: str) -> int:
         return _clamp_int(value, 8, 20)
     value = _env_int("CHAT_MAX_CANDIDATES_QA", DEFAULT_QA_MAX_CANDIDATES)
     return _clamp_int(value, 5, 12)
+
+
+def _normalize_technical_terms(text: str) -> str:
+    normalized = str(text or "")
+    if not normalized:
+        return normalized
+
+    normalized = re.sub(
+        r"(?i)\bcc\s*ie\s*field\s*configuration\b",
+        f"CC IE Field Configuration (used for {CC_LINK_SHORT_TERM} setup)",
+        normalized,
+    )
+    normalized = re.sub(
+        r"(?i)\bcc[- ]?link\s*ief\s*basic\b",
+        CC_LINK_FULL_TERM,
+        normalized,
+    )
+    normalized = re.sub(
+        r"(?i)\bcc[- ]?link\s*ie\s*field\s*network\s*basic\b",
+        CC_LINK_FULL_TERM,
+        normalized,
+    )
+    normalized = re.sub(
+        r"(?i)\bcc[- ]?link\s*ie\s*field\s*network\s*basic\s*\(cc[- ]?link\s*ief\)\s*\(cc[- ]?link\s*ief\)",
+        CC_LINK_FULL_TERM,
+        normalized,
+    )
+
+    first_idx = normalized.find(CC_LINK_FULL_TERM)
+    if first_idx >= 0:
+        head = normalized[: first_idx + len(CC_LINK_FULL_TERM)]
+        tail = normalized[first_idx + len(CC_LINK_FULL_TERM) :]
+        tail = tail.replace(CC_LINK_FULL_TERM, CC_LINK_SHORT_TERM)
+        normalized = head + tail
+
+    return normalized
 
 
 def _normalize_ollama_base_url(raw_url: str) -> str:
@@ -393,6 +498,20 @@ def invoke_llm_with_fallback(llm: Any, prompt: str) -> str:
         return _invoke_ollama_chat_fallback(prompt)
 
 
+def _content_fingerprint(text: str) -> str:
+    payload = (text or "").encode("utf-8", errors="ignore")
+    return hashlib.sha1(payload).hexdigest()[:10]
+
+
+def _preview_text(text: str, limit: int) -> str:
+    compact = (text or "").replace("\n", " ").strip()
+    if limit <= 0:
+        return ""
+    if len(compact) <= limit:
+        return compact
+    return compact[:limit].rstrip() + "..."
+
+
 # ============================================================
 # LOGGING UTILITIES
 # ============================================================
@@ -415,6 +534,8 @@ def log_chat_request(
     Includes: question, timing metrics, reranking process, chunk details, and RAGAS scores.
     """
     separator = "=" * 70
+    include_context_preview = _env_bool("LOG_CONTEXT_PREVIEW", False)
+    preview_chars = _clamp_int(_env_int("LOG_CONTEXT_PREVIEW_CHARS", 200), 80, 400)
     
     # Build log message
     log_parts = [
@@ -440,13 +561,21 @@ def log_chat_request(
         log_parts.append("")
         log_parts.append("   TOP RERANKED DOCS (before selection):")
         for i, doc in enumerate(reranked_docs[:5]):
-            score = getattr(doc, 'score', None) or doc.metadata.get('score', 'N/A')
+            metadata = getattr(doc, "metadata", {}) or {}
+            score = getattr(doc, "score", None) or metadata.get("score", "N/A")
             if isinstance(score, float):
                 score = f"{score:.4f}"
-            content_preview = doc.page_content[:80].replace('\n', ' ')
-            source = doc.metadata.get('source', 'unknown')[:30]
+            source = str(metadata.get("source", "unknown"))[:60]
+            content = getattr(doc, "page_content", "") or ""
+            preview = _preview_text(content, preview_chars)
+            fingerprint = _content_fingerprint(content)
             log_parts.append(f"   [{i+1}] Score: {score} | {source}")
-            log_parts.append(f"       Preview: {content_preview}...")
+            if include_context_preview:
+                log_parts.append(f"       Preview: {preview}")
+            else:
+                log_parts.append(
+                    f"       Content: [omitted] chars={len(content)} sha1={fingerprint}"
+                )
     
     log_parts.append("")
     
@@ -454,16 +583,24 @@ def log_chat_request(
     log_parts.append("📄 SELECTED CHUNKS (used for context):")
     if selected_docs:
         for i, doc in enumerate(selected_docs):
-            score = getattr(doc, 'score', None) or doc.metadata.get('score', 'N/A')
+            metadata = getattr(doc, "metadata", {}) or {}
+            score = getattr(doc, "score", None) or metadata.get("score", "N/A")
             if isinstance(score, float):
                 score = f"{score:.4f}"
-            content_preview = doc.page_content[:120].replace('\n', ' ')
-            source = doc.metadata.get('source', 'unknown')
-            chunk_type = doc.metadata.get('chunk_type', 'standard')
+            source = metadata.get("source", "unknown")
+            chunk_type = metadata.get("chunk_type", "standard")
+            content = getattr(doc, "page_content", "") or ""
+            preview = _preview_text(content, preview_chars)
+            fingerprint = _content_fingerprint(content)
             log_parts.append(f"   ── Chunk {i+1} ──")
             log_parts.append(f"   Score: {score} | Type: {chunk_type}")
             log_parts.append(f"   Source: {source}")
-            log_parts.append(f"   Content: {content_preview}...")
+            if include_context_preview:
+                log_parts.append(f"   Content: {preview}")
+            else:
+                log_parts.append(
+                    f"   Content: [omitted] chars={len(content)} sha1={fingerprint}"
+                )
             log_parts.append("")
     else:
         log_parts.append("   (No relevant chunks found)")
@@ -604,30 +741,11 @@ def build_source_citations(selected_docs: List, max_items: int = 6) -> List[Dict
 
 
 def build_citations_from_docs(docs):
-    seen = set()
     citations = []
-
-    for d in docs:
-        md = getattr(d, "metadata", {}) or {}
-
-        source = md.get("source_key") or md.get("source") or "unknown"
-        page = md.get("page") or 0
-
-        try:
-            page = int(page)
-        except Exception:
-            page = 0
-
-        key = (source, page)
-        if key in seen:
-            continue
-        seen.add(key)
-
-        if page > 0:
-            citations.append(f"{source} (page {page})")
-        else:
-            citations.append(f"{source}")
-
+    for item in build_source_citations(docs, max_items=10):
+        source = item["source"]
+        page = item["page"]
+        citations.append(f"{source} (page {page})" if page > 0 else source)
     return citations
 
 
@@ -678,20 +796,83 @@ def _compact_context_text(text: str, max_chars: int) -> str:
     return compact
 
 
-def _extract_candidate_steps(text: str) -> List[str]:
-    candidates: List[str] = []
-    for raw in (text or "").splitlines():
-        line = raw.strip()
-        if not line:
+def _clean_list_prefix(line: str) -> str:
+    cleaned = re.sub(r"^\s*\d+[.)]\s*", "", str(line or ""))
+    cleaned = re.sub(r"^\s*[-*•]\s*", "", cleaned)
+    return cleaned.strip()
+
+
+def _normalize_line_key(line: str) -> str:
+    return re.sub(r"\W+", " ", str(line or "").lower()).strip()
+
+
+def _dedupe_lines(items: List[str]) -> List[str]:
+    seen = set()
+    result: List[str] = []
+    for item in items:
+        key = _normalize_line_key(item)
+        if not key or key in seen:
             continue
-        if re.match(r"(?i)^sources?\s*:", line):
-            break
-        line = re.sub(r"^\d+[.)]\s*", "", line)
-        line = re.sub(r"^[-*]\s*", "", line)
-        if len(line) < 8:
-            continue
-        candidates.append(line)
-    return candidates
+        seen.add(key)
+        result.append(item.strip())
+    return result
+
+
+def _normalize_model_note(note: str, total_steps: int) -> str:
+    text = str(note or "").strip()
+    if not text:
+        return text
+
+    low = text.lower()
+    if "iq-f" in low and "step" in low and total_steps > 0:
+        end_step = min(5, total_steps)
+        return (
+            f"If MELSEC iQ-F models are used, follow Steps 1-{end_step} only. "
+            f"For other models, follow Steps 1-{total_steps}."
+        )
+
+    if total_steps > 0:
+        text = re.sub(r"(?i)\ball\s+\d+\s+steps\b", f"all {total_steps} steps", text)
+        text = re.sub(
+            r"(?i)\ball\s+(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+steps\b",
+            f"all {total_steps} steps",
+            text,
+        )
+        if total_steps != 7:
+            text = re.sub(r"(?i)\bseven steps\b", f"{total_steps} steps", text)
+
+    return text
+
+
+def _normalize_step_phrasing(step: str) -> str:
+    text = str(step or "").strip().rstrip(".")
+    if not text:
+        return text
+
+    low = text.lower()
+    if "enable or disable" in low and "when" not in low:
+        text = re.sub(r"(?i)\s*\(default[^)]*\)\s*", " ", text).strip().rstrip(".")
+        text += (
+            ". Set to Enable when CC-Link IEF communication is required; "
+            "set to Disable for Ethernet-only operation"
+        )
+
+    if (
+        ("configure network configuration" in low or "network configuration setting" in low)
+        and "link scan timeout" not in low
+    ):
+        text += (
+            ". Include key settings such as link scan timeout, retry count, "
+            "and remote-station detection behavior"
+        )
+
+    if "refresh" in low and "update" not in low and "apply" not in low:
+        text += (
+            ". Use Refresh to apply updated network parameters to the module "
+            "after changing network configuration"
+        )
+
+    return text
 
 
 def _step_bucket(step_text: str) -> str:
@@ -706,31 +887,195 @@ def _step_bucket(step_text: str) -> str:
 
 
 def _normalize_engineering_steps(raw: str, mode: str) -> str:
-    text = (raw or "").strip()
+    text = _normalize_technical_terms((raw or "").strip())
     if mode not in {"procedure", "troubleshoot"}:
         return text
 
-    steps = _extract_candidate_steps(text)
+    lines = [ln.rstrip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return text
+
+    steps: List[str] = []
+    notes: List[str] = []
+    troubleshooting: List[str] = []
+    in_troubleshooting = False
+
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        if re.match(r"(?i)^\*{0,2}\s*troubleshooting\s*\*{0,2}\s*:?\s*$", stripped):
+            in_troubleshooting = True
+            continue
+
+        if re.match(r"(?i)^sources?\s*:", stripped):
+            break
+
+        cleaned = _clean_list_prefix(stripped)
+        low = cleaned.lower()
+
+        if in_troubleshooting:
+            if len(cleaned) >= 6:
+                troubleshooting.append(cleaned)
+            continue
+
+        if re.match(r"^\d+[.)]\s+", stripped):
+            if len(cleaned) >= 8:
+                steps.append(cleaned)
+            continue
+
+        if re.match(r"(?i)^\*{0,2}\s*(prerequisites?|notes?|steps?)\s*\*{0,2}\s*:?\s*$", stripped):
+            continue
+
+        if (
+            low.startswith("note:")
+            or ("iq-f" in low and "step" in low)
+            or ("follow steps" in low and "model" in low)
+            or ("prerequisite" in low)
+        ):
+            notes.append(re.sub(r"(?i)^note:\s*", "", cleaned))
+            continue
+
+        if stripped.startswith(("-", "*", "•")):
+            if any(
+                hint in low
+                for hint in (
+                    "error",
+                    "fault",
+                    "alarm",
+                    "timeout",
+                    "led",
+                    "diagnostic",
+                    "not detected",
+                    "disconnected",
+                    "link scan",
+                )
+            ):
+                troubleshooting.append(cleaned)
+            else:
+                notes.append(cleaned)
+            continue
+
+        if len(cleaned) >= 10:
+            notes.append(cleaned)
+
+    steps = _dedupe_lines(steps)
     if not steps:
         return text
 
-    seen = set()
     buckets: Dict[str, List[str]] = {name: [] for name in PROCEDURE_BUCKET_ORDER}
     for step in steps:
-        norm = re.sub(r"\W+", " ", step.lower()).strip()
-        if not norm or norm in seen:
-            continue
-        seen.add(norm)
-        buckets[_step_bucket(step)].append(step)
+        buckets[_step_bucket(step)].append(_normalize_step_phrasing(step))
 
     ordered_steps: List[str] = []
     for bucket in PROCEDURE_BUCKET_ORDER:
         ordered_steps.extend(buckets.get(bucket, []))
 
-    if len(ordered_steps) < 2:
+    ordered_steps = _dedupe_lines(ordered_steps)
+    total_steps = len(ordered_steps)
+    if total_steps <= 0:
         return text
 
-    return "\n".join(f"{idx}. {step}" for idx, step in enumerate(ordered_steps, start=1))
+    notes = _dedupe_lines([_normalize_model_note(n, total_steps) for n in notes])
+    troubleshooting = _dedupe_lines(troubleshooting)
+
+    if not notes:
+        notes = [
+            "Confirm the exact PLC model/module and engineering software version before applying settings.",
+        ]
+
+    default_troubleshooting = [
+        "Check common failures: station not detected, timeout, or link scan failure.",
+        "Verify LEDs for the target module: RUN (expected ON), ERR (expected OFF), LINK (expected ON or blinking by traffic).",
+        "Confirm station number, network parameters, and module settings match on both ends.",
+        "Capture the exact error code from diagnostics and verify it against the manual section for the selected model.",
+    ]
+    for item in default_troubleshooting:
+        if len(troubleshooting) >= 4:
+            break
+        troubleshooting.append(item)
+    troubleshooting = _dedupe_lines(troubleshooting)
+
+    parts: List[str] = []
+    parts.append("**Prerequisites / Notes**")
+    parts.extend(f"- {note}" for note in notes)
+    parts.append("")
+    parts.append("**Steps**")
+    parts.extend(f"{idx}. {step}" for idx, step in enumerate(ordered_steps, start=1))
+    parts.append("")
+    parts.append("**Troubleshooting**")
+    parts.extend(f"- {item}" for item in troubleshooting)
+
+    return "\n".join(parts).strip()
+
+
+def _normalize_for_match(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(text or "").lower())
+
+
+def _extract_context_tokens(context_texts: List[str]) -> Dict[str, Any]:
+    raw_context = "\n".join(context_texts or []).lower()
+    normalized_context = _normalize_for_match(raw_context)
+    tokens = set()
+    patterns = (
+        IPV4_PATTERN,
+        HEX_VALUE_PATTERN,
+        REGISTER_VALUE_PATTERN,
+        UNIT_VALUE_PATTERN,
+        NUMBER_PATTERN,
+    )
+    for pattern in patterns:
+        for match in pattern.finditer(raw_context):
+            token = match.group(0).strip().lower()
+            if token:
+                tokens.add(token)
+                tokens.add(_normalize_for_match(token))
+    return {
+        "raw": raw_context,
+        "normalized": normalized_context,
+        "tokens": tokens,
+    }
+
+
+def _extract_parameter_tokens(line: str) -> List[str]:
+    candidates: List[str] = []
+    for pattern in (IPV4_PATTERN, HEX_VALUE_PATTERN, REGISTER_VALUE_PATTERN, UNIT_VALUE_PATTERN):
+        candidates.extend(m.group(0).strip() for m in pattern.finditer(line))
+
+    lower = (line or "").lower()
+    if any(hint in lower for hint in PARAMETER_VALUE_HINTS):
+        candidates.extend(m.group(0).strip() for m in NUMBER_PATTERN.finditer(line))
+
+    seen = set()
+    deduped: List[str] = []
+    for token in candidates:
+        key = token.lower().strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(token)
+    return deduped
+
+
+def _is_model_identifier(token: str) -> bool:
+    upper = str(token or "").upper()
+    return bool(MODEL_IDENTIFIER_PATTERN.fullmatch(upper)) and not bool(
+        REGISTER_VALUE_PATTERN.fullmatch(upper)
+    )
+
+
+def _token_found_in_context(token: str, context_data: Dict[str, Any]) -> bool:
+    token_low = str(token or "").lower().strip()
+    if not token_low:
+        return True
+    if token_low in context_data["raw"]:
+        return True
+    if re.fullmatch(r"\d+(?:\.\d+)?", token_low):
+        return token_low in context_data["tokens"]
+    normalized = _normalize_for_match(token_low)
+    if not normalized:
+        return True
+    if normalized in context_data["tokens"]:
+        return True
+    return normalized in context_data["normalized"]
 
 
 def _enforce_numeric_guardrail(text: str, context_texts: List[str], mode: str) -> str:
@@ -739,26 +1084,45 @@ def _enforce_numeric_guardrail(text: str, context_texts: List[str], mode: str) -
     if not text or not context_texts:
         return text
 
-    context_lower = "\n".join(context_texts).lower()
+    context_data = _extract_context_tokens(context_texts)
     masked = False
     safe_lines: List[str] = []
+
     for raw in text.splitlines():
         line = raw
         content = re.sub(r"^\d+[.)]\s*", "", raw).strip()
         low = content.lower()
-        if any(hint in low for hint in PARAMETER_VALUE_HINTS):
-            tokens = re.findall(r"\b[A-Za-z]*\d+[A-Za-z0-9./:-]*\b", content)
-            unknown_tokens = [tok for tok in tokens if tok.lower() not in context_lower]
-            if unknown_tokens:
-                masked = True
-                for tok in unknown_tokens[:10]:
-                    line = re.sub(rf"\b{re.escape(tok)}\b", "<verify-in-manual>", line)
+        is_parameter_line = any(hint in low for hint in PARAMETER_VALUE_HINTS)
+        if not is_parameter_line:
+            safe_lines.append(line)
+            continue
+
+        tokens = _extract_parameter_tokens(content)
+        unknown_tokens: List[str] = []
+        for token in tokens:
+            if _is_model_identifier(token):
+                continue
+            if re.fullmatch(r"\d", token.strip()):
+                continue
+            if _token_found_in_context(token, context_data):
+                continue
+            unknown_tokens.append(token)
+
+        if unknown_tokens:
+            masked = True
+            for token in sorted(set(unknown_tokens), key=len, reverse=True)[:12]:
+                line = re.sub(
+                    re.escape(token),
+                    "<verify-in-manual>",
+                    line,
+                    flags=re.IGNORECASE,
+                )
         safe_lines.append(line)
 
     guarded = "\n".join(safe_lines).strip()
     if masked:
         guarded += (
-            "\n\nNote: Some numeric values were masked because they were not found in retrieved manual context."
+            "\n\nNote: Some parameter values were masked because they were not found in retrieved manual context."
         )
     return guarded
 
@@ -820,13 +1184,22 @@ def _select_procedure_context_docs(
     if not scored:
         return []
 
-    # Strict retrieval filter for manual-actionable pages.
-    actionable_scored = [(doc, score) for doc, score in scored if _is_actionable_manual_chunk(doc)]
-    if actionable_scored:
-        scored = actionable_scored
-    else:
-        # If nothing matches required keyword filter, refuse to synthesize from non-actionable pages.
-        return []
+    # Prefer actionable chunks, but do not hard-reject all context when keyword hits are sparse.
+    boosted_scored = []
+    for doc, score in scored:
+        content = getattr(doc, "page_content", "") or ""
+        include_hits = _keyword_hits(content, RETRIEVAL_INCLUDE_TERMS)
+        exclude_hits = _keyword_hits(content, RETRIEVAL_EXCLUDE_TERMS)
+        boost = min(include_hits, 4) * 0.03
+        if _is_actionable_manual_chunk(doc):
+            boost += 0.08
+        if exclude_hits > 0 and include_hits <= 0:
+            boost -= 0.05
+        adjusted = max(0.0, float(score) + boost)
+        boosted_scored.append((doc, float(score), adjusted))
+
+    boosted_scored.sort(key=lambda item: item[2], reverse=True)
+    scored = [(doc, adjusted) for doc, _, adjusted in boosted_scored]
 
     by_source: Dict[str, List[tuple]] = {}
     source_weight: Dict[str, float] = {}
@@ -961,20 +1334,24 @@ def preprocess_query(query: str) -> str:
     if not query:
         return query
 
-    abbreviations = {
+    expansions = {
         "plc": "Programmable Logic Controller",
         "hmi": "Human Machine Interface",
         "profinet": "PROFINET",
         "i/o": "input output",
-        "gds": "Global Data Space",
-        "esm": "Execution and Synchronization Manager",
     }
 
-    processed = query.lower()
-    for abbr, full in abbreviations.items():
-        processed = re.sub(rf"\b{re.escape(abbr)}\b", full, processed)
+    processed = str(query).strip()
+    for abbr, full in expansions.items():
+        token_pattern = rf"(?<![A-Za-z0-9]){re.escape(abbr)}(?![A-Za-z0-9])"
+        processed = re.sub(
+            rf"(?i){token_pattern}(?!\s*\()",
+            lambda m: f"{m.group(0)} ({full})",
+            processed,
+        )
 
-    return processed if processed != query.lower() else query
+    processed = re.sub(r"\s{2,}", " ", processed).strip()
+    return processed
 
 
 # ============================================================
@@ -988,14 +1365,25 @@ Use only MANUAL CONTEXT below.
 Do not output retrieval/debug text.
 Do not invent numeric parameter values (addresses, station numbers, timers, register values) unless explicitly present in context.
 Never merge instructions across incompatible PLC models without labeling model differences.
+Write everything in English only.
 
 Core synthesis rule:
 Combine related configuration steps across multiple sections into a single executable procedure.
+Use consistent terminology:
+- First mention: CC-Link IE Field Network Basic (CC-Link IEF)
+- After first mention: CC-Link IEF
 
 Output policy:
-- If QUESTION_MODE is procedure/troubleshoot: return an ordered engineering procedure as numbered steps.
+- If QUESTION_MODE is procedure/troubleshoot: use this structure exactly:
+  1) Prerequisites / Notes
+  2) Steps
+  3) Troubleshooting
 - If QUESTION_MODE is qa: answer directly, then add short actionable steps only when useful.
 - If key info is missing after using all context, say exactly what is missing and continue with remaining verified steps.
+- Keep step numbering internally consistent (do not reference a total step count that does not exist).
+- For model-specific branching, write branching notes before steps (not inside the middle of step flow).
+- For enable/disable settings, provide explicit decision criteria.
+- In troubleshooting, include common failure patterns (for example: station not detected, timeout, link scan fail), relevant LEDs (RUN/ERR/LINK), and likely diagnostic checks.
 
 {history_section}MANUAL CONTEXT:
 {context}
@@ -1179,8 +1567,9 @@ def answer_question(
             source_page = _doc_source_page(doc, fallback_index=i)
             page = source_page["page"]
             page_label = str(page) if page > 0 else "unknown"
+            source_label = str(source_page["source"]).replace("\n", " ").strip()
             context_headers.append(
-                f"[Source: {source_page['source']} | Page: {page_label}]"
+                f"<<<DOC {i + 1} source={source_label} page={page_label}>>>"
             )
 
         context_str = "\n\n---\n\n".join(
@@ -1250,15 +1639,13 @@ def answer_question(
     allow_source_citations = True
 
     if enable_chat_ragas and context_texts:
-        # Check if this is an identity/greeting question that should skip RAGAS check
-        question_lower = question.lower()
-        skip_ragas_check = any(pattern in question_lower for pattern in SKIP_RAGAS_PATTERNS)
+        skip_ragas_check = _should_skip_ragas(processed_msg)
 
         try:
             from app.ragas_eval import simple_ragas_eval
 
             ragas_scores = simple_ragas_eval(
-                question=question,
+                question=processed_msg,
                 answer=reply,
                 contexts=context_texts,
             )
@@ -1266,29 +1653,54 @@ def answer_question(
             # Check if quality is too low (but skip for identity/greeting questions)
             if not skip_ragas_check and ragas_scores and ragas_scores.get("scores"):
                 scores = ragas_scores["scores"]
-                quality_scores = []
-                for key in ["faithfulness", "context_precision", "context_recall"]:
-                    val = scores.get(key)
-                    if val is not None:
-                        quality_scores.append(val)
+                threshold = _env_float("RAGAS_MIN_THRESHOLD", RAGAS_MIN_THRESHOLD)
+                faith_hard_fail = _env_float(
+                    "RAGAS_FAITHFULNESS_HARD_FAIL",
+                    RAGAS_FAITHFULNESS_HARD_FAIL,
+                )
+                relevancy_hard_fail = _env_float(
+                    "RAGAS_RELEVANCY_HARD_FAIL",
+                    RAGAS_RELEVANCY_HARD_FAIL,
+                )
 
-                if quality_scores:
-                    avg_quality = sum(quality_scores) / len(quality_scores)
-                    if avg_quality < RAGAS_MIN_THRESHOLD:
-                        reply = (
-                            "I'm sorry, but I don't have enough reliable information in my documents "
-                            "to answer this question accurately. The context I found may not be "
-                            "relevant or sufficient.\n\n"
-                            "**Please try:**\n"
-                            "• Rephrasing your question\n"
-                            "• Asking about a more specific topic\n"
-                            "• Checking if the topic is covered in the documentation"
-                        )
-                        logger.warning(
-                            f"⚠️ Low quality response detected (avg={avg_quality:.2f} < {RAGAS_MIN_THRESHOLD}). "
-                            f"Replacing with 'I don't know' message."
-                        )
-                        allow_source_citations = False
+                weighted_sum = 0.0
+                weight_total = 0.0
+                for metric, weight in RAGAS_METRIC_WEIGHTS.items():
+                    val = scores.get(metric)
+                    if val is None:
+                        continue
+                    weighted_sum += float(val) * float(weight)
+                    weight_total += float(weight)
+                weighted_quality = (weighted_sum / weight_total) if weight_total > 0 else None
+
+                faithfulness = scores.get("faithfulness")
+                relevancy = scores.get("answer_relevancy")
+                hard_fail = (
+                    (faithfulness is not None and float(faithfulness) < faith_hard_fail)
+                    or (relevancy is not None and float(relevancy) < relevancy_hard_fail)
+                )
+                low_quality = (
+                    weighted_quality is not None and weighted_quality < threshold
+                )
+
+                if hard_fail or low_quality:
+                    reply = (
+                        "I'm sorry, but I don't have enough reliable information in my documents "
+                        "to answer this question accurately. The context I found may not be "
+                        "relevant or sufficient.\n\n"
+                        "**Please try:**\n"
+                        "• Rephrasing your question\n"
+                        "• Asking about a more specific topic\n"
+                        "• Checking if the topic is covered in the documentation"
+                    )
+                    logger.warning(
+                        "⚠️ RAGAS quality gate triggered "
+                        f"(weighted={weighted_quality if weighted_quality is not None else 'N/A'}, "
+                        f"faithfulness={faithfulness}, relevancy={relevancy}, "
+                        f"threshold={threshold}, hard_fail={hard_fail}). "
+                        "Replacing with fallback response."
+                    )
+                    allow_source_citations = False
         except Exception as e:
             logger.warning(f"RAGAS evaluation failed: {e}")
             ragas_scores = None

@@ -1,11 +1,9 @@
-import { Sparkles } from "lucide-react";
-
 export default function ChatWelcome({ user, onPromptSelect, composer }) {
   return (
     <div className="flex-1 flex flex-col items-center justify-center px-4 pb-8">
       <div className="mb-8 text-center fade-in-up">
-        <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-500 to-cyan-400 shadow-xl shadow-blue-500/20 mb-5">
-          <Sparkles size={28} className="text-white" />
+        <div className="inline-flex items-center rounded-full border border-slate-200 bg-white/70 backdrop-blur px-3 py-1.5 text-[11px] font-semibold tracking-wider text-slate-600 uppercase mb-5">
+          Industrial Assistant
         </div>
         <h2 className="text-2xl sm:text-3xl font-bold text-slate-800 mb-2">
           Hey{user.full_name ? `, ${user.full_name.split(" ")[0]}` : ""}!

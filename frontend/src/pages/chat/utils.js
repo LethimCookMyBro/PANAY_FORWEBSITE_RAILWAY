@@ -55,7 +55,7 @@ export const stripTrailingSourcesBlock = (text) => {
   if (typeof text !== "string") return "";
   return text
     .replace(
-      /\n{2,}(?:Sources|Source citations|References|อ้างอิง)\s*:\s*(?:\n-\s.*)+\s*$/i,
+      /\n{2,}(?:Sources|Source citations|References)\s*:\s*(?:\n-\s.*)+\s*$/i,
       "",
     )
     .trim();
@@ -186,14 +186,14 @@ const appendTroubleshootingHints = (text) => {
   if (!normalized) return normalized;
 
   const needsTroubleshootingHint =
-    /(error|fault|alarm|problem|issue|cannot|unable|missing|not\s+found|insufficient|ไม่พบ|ปัญหา|ผิดพลาด)/i.test(
+    /(error|fault|alarm|problem|issue|cannot|unable|missing|not\s+found|insufficient|timeout|not\s+detected|disconnected)/i.test(
       normalized,
     );
 
   if (!needsTroubleshootingHint) return normalized;
-  if (/troubleshooting|วิธีแก้ปัญหา/i.test(normalized)) return normalized;
+  if (/troubleshooting/i.test(normalized)) return normalized;
 
-  return `${normalized}\n\n**วิธีแก้ปัญหา (Troubleshooting)**\n- ระบุรุ่น PLC/โมดูล และซอฟต์แวร์ที่ใช้ให้ชัด\n- ใส่ Error code, LED status และอาการที่เกิดขึ้นจริง\n- ระบุ Network/Protocol และขั้นตอนที่ลองแก้ไปแล้ว`;
+  return `${normalized}\n\n**Troubleshooting**\n- Confirm PLC model/module and software version (for example, GX Works version).\n- Record the exact error code, LED status (RUN/ERR/LINK), and observed symptom.\n- Verify network/protocol settings and list what has already been tested.\n- Check common faults: station not detected, link scan timeout, or remote disconnect.`;
 };
 
 export const formatAssistantText = (rawText) => {
