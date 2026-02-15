@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Bot, LoaderCircle, Mail, Lock, Sparkles } from "lucide-react";
+import { LoaderCircle, Mail, Lock, Sparkles } from "lucide-react";
 import { authAPI, getApiErrorMessage } from "../utils/api";
 
 function Login({ onLogin, onGoRegister }) {
@@ -38,7 +38,11 @@ function Login({ onLogin, onGoRegister }) {
         <div className="flex flex-col items-center mb-8">
           <div className="relative mb-4">
             <div className="bg-gradient-to-br from-blue-500 to-cyan-400 p-4 rounded-2xl shadow-2xl shadow-blue-500/25">
-              <Bot className="w-10 h-10 text-white" />
+              <img
+                src="/panya-logo.png"
+                alt="Panya logo"
+                className="w-10 h-10 object-contain"
+              />
             </div>
             <div className="absolute -top-1 -right-1">
               <Sparkles className="w-5 h-5 text-cyan-400" />

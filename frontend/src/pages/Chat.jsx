@@ -9,7 +9,6 @@ import {
   FileText,
   LoaderCircle,
   LogOut,
-  Bot,
   Trash2,
   PanelLeftClose,
   PanelLeft,
@@ -883,7 +882,11 @@ export default function Chat({ onLogout }) {
           {(isCompactLayout || !sidebarCollapsed) && (
             <div className="flex items-center gap-3 px-1">
               <div className="bg-gradient-to-br from-blue-500 to-cyan-400 p-2 rounded-xl shadow-lg shadow-blue-500/25">
-                <Bot className="w-6 h-6 text-white" />
+                <img
+                  src="/panya-logo.png"
+                  alt="Panya logo"
+                  className="w-6 h-6 object-contain"
+                />
               </div>
               <div>
                 <h1 className="text-lg font-bold text-white tracking-tight">
@@ -897,7 +900,11 @@ export default function Chat({ onLogout }) {
           )}
           {!isCompactLayout && sidebarCollapsed && (
             <div className="bg-gradient-to-br from-blue-500 to-cyan-400 p-2 rounded-xl shadow-lg shadow-blue-500/25">
-              <Bot className="w-5 h-5 text-white" />
+              <img
+                src="/panya-logo.png"
+                alt="Panya logo"
+                className="w-5 h-5 object-contain"
+              />
             </div>
           )}
           <button
@@ -1175,7 +1182,11 @@ export default function Chat({ onLogout }) {
                       {/* Bot avatar */}
                       {m.sender === "bot" && (
                         <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-400 flex items-center justify-center flex-shrink-0 mt-1 shadow-sm">
-                          <Bot size={14} className="text-white" />
+                          <img
+                            src="/panya-logo.png"
+                            alt="Panya logo"
+                            className="w-4 h-4 object-contain"
+                          />
                         </div>
                       )}
                       <div
@@ -1302,7 +1313,11 @@ export default function Chat({ onLogout }) {
                 {isLoading && (
                   <div className="flex items-start gap-3 fade-in-up">
                     <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-400 flex items-center justify-center flex-shrink-0 shadow-sm pulse-glow">
-                      <Bot size={14} className="text-white" />
+                      <img
+                        src="/panya-logo.png"
+                        alt="Panya logo"
+                        className="w-4 h-4 object-contain"
+                      />
                     </div>
                     <div className="bg-white/90 backdrop-blur px-5 py-3.5 rounded-2xl border border-white shadow-md">
                       <div className="flex items-center gap-1.5">
