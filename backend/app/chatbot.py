@@ -25,6 +25,8 @@ ALPHA = 0.6
 HARD_MIN = 0.10
 SOFT_MIN = 0.15
 MAX_CANDIDATES = 5
+PROCEDURE_FINAL_K = 8
+PROCEDURE_MAX_CANDIDATES = 16
 
 # RAGAS quality threshold - if average score below this, respond "I don't know"
 RAGAS_MIN_THRESHOLD = 0.40  # 40% minimum average quality
@@ -36,6 +38,26 @@ SKIP_RAGAS_PATTERNS = [
     "thank you", "thanks", "bye", "goodbye", "see you",
     "how are you", "what can you do", "help me", "what is panya",
 ]
+
+PROCEDURE_QUERY_HINTS = (
+    "how to",
+    "steps",
+    "step by step",
+    "setup",
+    "set up",
+    "configure",
+    "configuration",
+    "commission",
+    "parameter",
+    "wiring",
+    "troubleshoot",
+    "fix",
+    "reset",
+    "cc-link",
+    "field network",
+    "gx works",
+    "error code",
+)
 
 _PROMPT_LEAK_PATTERNS = (
     r"(?i)\bcritical\s+rule\s*:\s*make\s+sure\s+to\s+answer\s+using\s+information\s+from\s+the\s+context\s+above\b[^\n.]*[.]?",
@@ -77,6 +99,13 @@ def _sanitize_prompt_leakage(text: Any) -> str:
         cleaned = re.sub(pattern, "", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return cleaned.strip()
+
+
+def _is_procedure_query(question: str) -> bool:
+    q = (question or "").strip().lower()
+    if not q:
+        return False
+    return any(hint in q for hint in PROCEDURE_QUERY_HINTS)
 
 
 def _env_bool(key: str, default: bool = False) -> bool:
@@ -458,9 +487,26 @@ def build_citations_from_docs(docs):
 # CONTEXT SELECTION
 # ============================================================
 
-def select_context_docs(retrieved_docs: List, max_candidates: int = MAX_CANDIDATES) -> List:
-    candidates = (retrieved_docs or [])[:max_candidates]
+def _doc_source_key(doc) -> str:
+    md = getattr(doc, "metadata", {}) or {}
+    source = md.get("source") or md.get("source_key") or "unknown"
+    return os.path.basename(str(source))
 
+
+def _doc_page(doc) -> int:
+    md = getattr(doc, "metadata", {}) or {}
+    return _coerce_positive_int(md.get("page"))
+
+
+def _doc_dedupe_key(doc) -> tuple:
+    source = _doc_source_key(doc)
+    page = _doc_page(doc)
+    preview = (getattr(doc, "page_content", "") or "")[:120]
+    return (source, page, preview)
+
+
+def _select_default_context_docs(retrieved_docs: List, max_candidates: int = MAX_CANDIDATES) -> List:
+    candidates = (retrieved_docs or [])[:max_candidates]
     if not candidates:
         return []
 
@@ -469,16 +515,107 @@ def select_context_docs(retrieved_docs: List, max_candidates: int = MAX_CANDIDAT
         return []
 
     cutoff = max(max_score * ALPHA, SOFT_MIN)
-
     final_docs = []
+    seen = set()
     for i, doc in enumerate(candidates):
         score = get_doc_score(doc) or max_score
-        if i < MIN_KEEP or score >= cutoff:
-            final_docs.append(doc)
+        if i >= MIN_KEEP and score < cutoff:
+            continue
+        key = _doc_dedupe_key(doc)
+        if key in seen:
+            continue
+        seen.add(key)
+        final_docs.append(doc)
         if len(final_docs) >= FINAL_K:
+            break
+    return final_docs
+
+
+def _select_procedure_context_docs(retrieved_docs: List, max_candidates: int = PROCEDURE_MAX_CANDIDATES) -> List:
+    candidates = (retrieved_docs or [])[:max_candidates]
+    if not candidates:
+        return []
+
+    max_score = get_doc_score(candidates[0])
+    if max_score is None or max_score < HARD_MIN:
+        return []
+
+    # Keep a wider band to allow cross-page synthesis.
+    cutoff = max(max_score * 0.45, SOFT_MIN * 0.8)
+    scored = []
+    for i, doc in enumerate(candidates):
+        score = get_doc_score(doc) or max_score
+        if i >= MIN_KEEP and score < cutoff:
+            continue
+        scored.append((doc, float(score)))
+
+    if not scored:
+        return []
+
+    by_source: Dict[str, List[tuple]] = {}
+    source_weight: Dict[str, float] = {}
+    for doc, score in scored:
+        source = _doc_source_key(doc)
+        by_source.setdefault(source, []).append((doc, score))
+        source_weight[source] = source_weight.get(source, 0.0) + score
+
+    # Favor one dominant manual to prevent mixed-document summaries.
+    primary_source = max(
+        source_weight.items(),
+        key=lambda kv: (kv[1], len(by_source.get(kv[0], []))),
+    )[0]
+
+    primary_docs = by_source.get(primary_source, [])
+    other_docs = [
+        (doc, score)
+        for source, pairs in by_source.items()
+        if source != primary_source
+        for doc, score in pairs
+    ]
+
+    # Order primary docs in reading order for cross-page procedure assembly.
+    primary_docs.sort(
+        key=lambda pair: (
+            0 if _doc_page(pair[0]) > 0 else 1,
+            _doc_page(pair[0]) if _doc_page(pair[0]) > 0 else 10**9,
+            -pair[1],
+        )
+    )
+    other_docs.sort(key=lambda pair: pair[1], reverse=True)
+
+    final_docs = []
+    seen = set()
+    for doc, _ in primary_docs:
+        key = _doc_dedupe_key(doc)
+        if key in seen:
+            continue
+        seen.add(key)
+        final_docs.append(doc)
+        if len(final_docs) >= PROCEDURE_FINAL_K:
+            return final_docs
+
+    for doc, _ in other_docs:
+        key = _doc_dedupe_key(doc)
+        if key in seen:
+            continue
+        seen.add(key)
+        final_docs.append(doc)
+        if len(final_docs) >= PROCEDURE_FINAL_K:
             break
 
     return final_docs
+
+
+def select_context_docs(
+    retrieved_docs: List,
+    question: str = "",
+    max_candidates: int = MAX_CANDIDATES,
+) -> List:
+    if _is_procedure_query(question):
+        docs = _select_procedure_context_docs(retrieved_docs, max_candidates=PROCEDURE_MAX_CANDIDATES)
+        if docs:
+            return docs
+    return _select_default_context_docs(retrieved_docs, max_candidates=max_candidates)
 
 
 # ============================================================
@@ -593,12 +730,23 @@ RESPONSE QUALITY:
 - For CC-Link IE Field setup, include these parameter names explicitly if present in context:
   Station No., Network No., Refresh Parameter (RX/RY/RWr/RWw), module assignment in PLC parameters, and Online Write + PLC reset/power cycle.
 - If any checklist item is not present in retrieved context, mark it as "Not found in retrieved pages" instead of inventing data.
+- When QUESTION_MODE=procedure:
+  - Do procedure synthesis (integrate steps across multiple retrieved pages), not document summary.
+  - Merge duplicated steps, resolve order by evidence, and output one end-to-end workflow.
+  - Every numbered step must include at least one evidence tag: [Source: ... | Page: ...].
+  - Include a short "Missing from retrieved pages" section for gaps that prevent exact execution.
+
+QUESTION_MODE:
+{question_mode}
 
 CURRENT QUESTION:
 {question}
 
 ANSWER:"""
-    return PromptTemplate(input_variables=["history_section", "context", "question"], template=template)
+    return PromptTemplate(
+        input_variables=["history_section", "context", "question_mode", "question"],
+        template=template,
+    )
 
 
 def build_no_context_prompt() -> PromptTemplate:
@@ -725,7 +873,8 @@ def answer_question(
         # Backward compatibility for custom rerankers without prefetched_docs.
         reranker = reranker_class(base_retriever=base_retriever)
     retrieved_docs = reranker.invoke(processed_msg) or []
-    selected_docs = select_context_docs(retrieved_docs)
+    question_mode = "procedure" if _is_procedure_query(processed_msg) else "qa"
+    selected_docs = select_context_docs(retrieved_docs, question=processed_msg)
     
     t_rerank_end = time.perf_counter()
     rerank_time = t_rerank_end - t_rerank_start
@@ -756,6 +905,7 @@ def answer_question(
         prompt_inputs = {
             "history_section": history_section,
             "context": context_str,
+            "question_mode": question_mode,
             "question": processed_msg,
         }
     else:
@@ -883,6 +1033,7 @@ def answer_question(
         "retrieval_time": round(retrieval_time, 2),
         "rerank_time": round(rerank_time, 2),
         "llm_time": round(llm_time, 2),
+        "question_mode": question_mode,
         "context_count": len(context_texts),
         "max_score": max_score,
         "ragas": ragas_scores,
