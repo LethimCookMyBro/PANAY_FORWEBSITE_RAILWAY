@@ -1177,11 +1177,11 @@ export default function Chat({ onLogout }) {
                     >
                       {/* Bot avatar */}
                       {m.sender === "bot" && (
-                        <div className="w-7 h-7 flex items-center justify-center flex-shrink-0 mt-1">
+                        <div className="w-10 h-10 flex items-center justify-center flex-shrink-0 mt-0.5">
                           <img
                             src="/panya-logo.png"
                             alt="Panya logo"
-                            className="w-4 h-4 object-contain"
+                            className="w-8 h-8 object-contain"
                           />
                         </div>
                       )}
@@ -1308,11 +1308,11 @@ export default function Chat({ onLogout }) {
                 {/* Typing indicator */}
                 {isLoading && (
                   <div className="flex items-start gap-3 fade-in-up">
-                    <div className="w-7 h-7 flex items-center justify-center flex-shrink-0 pulse-glow">
+                    <div className="w-10 h-10 flex items-center justify-center flex-shrink-0 pulse-glow">
                       <img
                         src="/panya-logo.png"
                         alt="Panya logo"
-                        className="w-4 h-4 object-contain"
+                        className="w-8 h-8 object-contain"
                       />
                     </div>
                     <div className="bg-white/90 backdrop-blur px-5 py-3.5 rounded-2xl border border-white shadow-md">

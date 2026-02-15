@@ -136,9 +136,18 @@ class Config:
     OLLAMA_BASE_URL: str = normalize_ollama_base_url(
         os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
     )
-    LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.7"))
+    LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0"))
+    LLM_TOP_P: float = float(os.getenv("LLM_TOP_P", "0.1"))
+    LLM_FREQUENCY_PENALTY: float = float(os.getenv("LLM_FREQUENCY_PENALTY", "0.2"))
+    LLM_PRESENCE_PENALTY: float = float(os.getenv("LLM_PRESENCE_PENALTY", "0.0"))
+    LLM_REPEAT_PENALTY: float = float(
+        os.getenv(
+            "LLM_REPEAT_PENALTY",
+            str(1.0 + max(0.0, float(os.getenv("LLM_FREQUENCY_PENALTY", "0.2")))),
+        )
+    )
     LLM_TIMEOUT: int = int(os.getenv("LLM_TIMEOUT", "20"))
-    LLM_NUM_PREDICT: int = int(os.getenv("LLM_NUM_PREDICT", "1024"))  # Max output tokens
+    LLM_NUM_PREDICT: int = int(os.getenv("LLM_NUM_PREDICT", "420"))  # Max output tokens
     
     # Embeddings
     EMBED_MODEL_NAME: str = os.getenv("EMBED_MODEL", "BAAI/bge-m3")
@@ -179,6 +188,13 @@ logger.info("=" * 60)
 logger.info(f"  App Env: {config.APP_ENV}")
 logger.info(f"  Ollama URL: {config.OLLAMA_BASE_URL}")
 logger.info(f"  Ollama Model: {config.OLLAMA_MODEL}")
+logger.info(
+    "  LLM sampling: temp=%s top_p=%s repeat_penalty=%s num_predict=%s",
+    config.LLM_TEMPERATURE,
+    config.LLM_TOP_P,
+    config.LLM_REPEAT_PENALTY,
+    config.LLM_NUM_PREDICT,
+)
 logger.info(f"  Embed Model: {config.EMBED_MODEL_NAME}")
 logger.info("=" * 60)
 
@@ -756,6 +772,8 @@ async def lifespan(app: FastAPI):
                 model=config.OLLAMA_MODEL,
                 base_url=config.OLLAMA_BASE_URL,
                 temperature=config.LLM_TEMPERATURE,
+                top_p=config.LLM_TOP_P,
+                repeat_penalty=config.LLM_REPEAT_PENALTY,
                 timeout=config.LLM_TIMEOUT,
                 num_predict=config.LLM_NUM_PREDICT,  # Limit output tokens
             )
