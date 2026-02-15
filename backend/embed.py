@@ -36,6 +36,10 @@ if FORCE_EMBED_CPU:
     print("[embed] forcing Docling CPU mode (EMBED_USE_CPU=true)")
 
 from dotenv import load_dotenv
+from docling.datamodel.accelerator_options import AcceleratorOptions
+from docling.datamodel.base_models import InputFormat
+from docling.datamodel.pipeline_options import ThreadedPdfPipelineOptions
+from docling.document_converter import DocumentConverter, ImageFormatOption, PdfFormatOption
 from langchain_core.documents import Document
 from langchain_docling import DoclingLoader
 from langchain_docling.loader import ExportType
@@ -81,8 +85,35 @@ def _env_int(key: str, default: int, minimum: int = 1) -> int:
     return max(minimum, value)
 
 
+def _env_bool(key: str, default: bool = False) -> bool:
+    raw = os.getenv(key)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _env_float(key: str, default: float, minimum: float = 0.0) -> float:
+    raw = os.getenv(key)
+    try:
+        value = float(str(raw)) if raw is not None else float(default)
+    except Exception:
+        value = float(default)
+    return max(minimum, value)
+
+
 DEFAULT_EMBED_MAX_TOKENS = _env_int("EMBED_MAX_TOKENS", 480, minimum=32)
 DEFAULT_EMBED_TOKEN_OVERLAP = _env_int("EMBED_TOKEN_OVERLAP", 64, minimum=0)
+DEFAULT_ENCODE_BATCH_SIZE = _env_int("EMBED_ENCODE_BATCH_SIZE", 8, minimum=1)
+DEFAULT_DB_RETRIES = _env_int("EMBED_DB_RETRIES", 2, minimum=0)
+DEFAULT_DB_CONNECT_TIMEOUT = _env_int("EMBED_DB_CONNECT_TIMEOUT", 20, minimum=1)
+DEFAULT_DB_KEEPALIVES_IDLE = _env_int("EMBED_DB_KEEPALIVES_IDLE", 30, minimum=1)
+DEFAULT_DB_KEEPALIVES_INTERVAL = _env_int("EMBED_DB_KEEPALIVES_INTERVAL", 10, minimum=1)
+DEFAULT_DB_KEEPALIVES_COUNT = _env_int("EMBED_DB_KEEPALIVES_COUNT", 5, minimum=1)
+DEFAULT_FALLBACK_CPU_ON_CUDA_ERROR = _env_bool("EMBED_FALLBACK_TO_CPU_ON_CUDA_ERROR", True)
+DEFAULT_DOCLING_OCR = _env_bool("EMBED_DOCLING_OCR", True)
+DEFAULT_DOCLING_TABLE_STRUCTURE = _env_bool("EMBED_DOCLING_TABLE_STRUCTURE", True)
+DEFAULT_DOCLING_FORCE_BACKEND_TEXT = _env_bool("EMBED_DOCLING_FORCE_BACKEND_TEXT", False)
+DEFAULT_DOCLING_IMAGES_SCALE = _env_float("EMBED_DOCLING_IMAGES_SCALE", 1.0, minimum=0.1)
 
 
 @dataclass
@@ -266,6 +297,11 @@ def load_chunks_for_file(
     chunk_size: int,
     chunk_overlap: int,
     embedded_at: str,
+    force_docling_cpu: bool = False,
+    docling_do_ocr: bool = True,
+    docling_do_table_structure: bool = True,
+    docling_force_backend_text: bool = False,
+    docling_images_scale: float = 1.0,
 ) -> List[Document]:
     extra_metadata = build_chunk_metadata(file_record, embedded_at)
     lower = file_record.path.lower()
@@ -274,14 +310,45 @@ def load_chunks_for_file(
         return create_json_qa_chunks(file_record.path, extra_metadata=extra_metadata)
 
     if lower.endswith(".pdf"):
-        loader = DoclingLoader(file_path=file_record.path, export_type=ExportType.DOC_CHUNKS)
-        pages = loader.load()
-        return create_pdf_chunks(
-            pages,
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
-            extra_metadata=extra_metadata,
-        )
+        previous_docling_device = os.environ.get("DOCLING_DEVICE")
+        if force_docling_cpu:
+            os.environ["DOCLING_DEVICE"] = "cpu"
+        try:
+            docling_device = "cpu" if force_docling_cpu else "auto"
+            accel = AcceleratorOptions(device=docling_device)
+            pipeline = ThreadedPdfPipelineOptions(
+                accelerator_options=accel,
+                do_ocr=bool(docling_do_ocr),
+                do_table_structure=bool(docling_do_table_structure),
+                force_backend_text=bool(docling_force_backend_text),
+                images_scale=max(0.1, float(docling_images_scale)),
+            )
+            converter = DocumentConverter(
+                format_options={
+                    InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline),
+                    InputFormat.IMAGE: ImageFormatOption(pipeline_options=pipeline),
+                }
+            )
+            loader_kwargs: Dict[str, Any] = {
+                "file_path": file_record.path,
+                "export_type": ExportType.DOC_CHUNKS,
+                "converter": converter,
+            }
+
+            loader = DoclingLoader(**loader_kwargs)
+            pages = loader.load()
+            return create_pdf_chunks(
+                pages,
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                extra_metadata=extra_metadata,
+            )
+        finally:
+            if force_docling_cpu:
+                if previous_docling_device is None:
+                    os.environ.pop("DOCLING_DEVICE", None)
+                else:
+                    os.environ["DOCLING_DEVICE"] = previous_docling_device
 
     return []
 
@@ -328,8 +395,97 @@ def delete_source_rows(
 
 def clear_torch_cache() -> None:
     gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    try:
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        # CUDA context may already be poisoned; cache clear should never crash ingest.
+        pass
+
+
+def is_connection_open(conn) -> bool:
+    return conn is not None and getattr(conn, "closed", 1) == 0
+
+
+def safe_rollback(conn) -> None:
+    if not is_connection_open(conn):
+        return
+    try:
+        conn.rollback()
+    except Exception:
+        pass
+
+
+def close_connection(conn) -> None:
+    if conn is None:
+        return
+    try:
+        conn.close()
+    except Exception:
+        pass
+
+
+def connect_db(db_url: str):
+    return psycopg2.connect(
+        db_url,
+        connect_timeout=DEFAULT_DB_CONNECT_TIMEOUT,
+        keepalives=1,
+        keepalives_idle=DEFAULT_DB_KEEPALIVES_IDLE,
+        keepalives_interval=DEFAULT_DB_KEEPALIVES_INTERVAL,
+        keepalives_count=DEFAULT_DB_KEEPALIVES_COUNT,
+    )
+
+
+def is_transient_db_error(exc: Exception) -> bool:
+    if isinstance(exc, (psycopg2.OperationalError, psycopg2.InterfaceError)):
+        return True
+    msg = str(exc or "").lower()
+    transient_signals = (
+        "connection timed out",
+        "ssl syscall error",
+        "server closed the connection unexpectedly",
+        "could not receive data from server",
+        "connection already closed",
+        "terminating connection",
+    )
+    return any(sig in msg for sig in transient_signals)
+
+
+def reconnect_db(conn, db_url: Optional[str], reason: str):
+    if not db_url:
+        return conn
+    close_connection(conn)
+    logging.warning("Reconnecting DB due to: %s", reason)
+    return connect_db(db_url)
+
+
+def is_cuda_runtime_error(exc: Exception) -> bool:
+    msg = str(exc or "").lower()
+    signals = (
+        "cuda error",
+        "cudart",
+        "device-side assertions",
+        "cuda kernel errors might be asynchronously reported",
+        "torch.use_cuda_dsa",
+    )
+    return any(sig in msg for sig in signals)
+
+
+def load_sentence_embedder(
+    model_name: str,
+    cache_folder: str,
+    device: str,
+    max_embed_tokens: int,
+) -> SentenceTransformer:
+    logging.info("Loading embed model: %s", model_name)
+    embedder = SentenceTransformer(model_name, device=device, cache_folder=cache_folder)
+    try:
+        embedder.max_seq_length = max(32, int(max_embed_tokens))
+        logging.info("Embedder max_seq_length set to %d", embedder.max_seq_length)
+    except Exception:
+        logging.warning("Could not set embedder max_seq_length; relying on model defaults")
+    logging.info("Embed model loaded on %s", device)
+    return embedder
 
 
 def _resolve_embedder_tokenizer(embedder: SentenceTransformer):
@@ -444,6 +600,7 @@ def insert_chunks_for_file(
     collection: str,
     *,
     batch_size: int,
+    encode_batch_size: int,
     replace_source: Optional[Tuple[str, str, bool]] = None,
 ) -> Tuple[int, int]:
     """
@@ -454,6 +611,8 @@ def insert_chunks_for_file(
     """
     inserted_total = 0
     deleted_rows = 0
+
+    encode_batch_size = max(1, int(encode_batch_size))
 
     with conn.cursor() as cur:
         if replace_source is not None:
@@ -477,7 +636,7 @@ def insert_chunks_for_file(
             embeddings = embedder.encode(
                 texts,
                 show_progress_bar=False,
-                batch_size=32,
+                batch_size=encode_batch_size,
                 normalize_embeddings=True,
             )
 
@@ -536,6 +695,57 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_EMBED_TOKEN_OVERLAP,
         help="Token overlap used when splitting oversized chunks",
     )
+    parser.add_argument(
+        "--docling-do-ocr",
+        dest="docling_do_ocr",
+        action="store_true",
+        help="Enable OCR in Docling parse pipeline (slower, needed for scanned PDFs)",
+    )
+    parser.add_argument(
+        "--no-docling-do-ocr",
+        dest="docling_do_ocr",
+        action="store_false",
+        help="Disable OCR in Docling parse pipeline for faster processing on text PDFs",
+    )
+    parser.set_defaults(docling_do_ocr=DEFAULT_DOCLING_OCR)
+    parser.add_argument(
+        "--docling-do-table-structure",
+        dest="docling_do_table_structure",
+        action="store_true",
+        help="Enable Docling table-structure model (more accurate tables, slower)",
+    )
+    parser.add_argument(
+        "--no-docling-do-table-structure",
+        dest="docling_do_table_structure",
+        action="store_false",
+        help="Disable Docling table-structure model for faster parsing",
+    )
+    parser.set_defaults(docling_do_table_structure=DEFAULT_DOCLING_TABLE_STRUCTURE)
+    parser.add_argument(
+        "--docling-force-backend-text",
+        dest="docling_force_backend_text",
+        action="store_true",
+        help="Prefer PDF backend text layer instead of layout text extraction (faster for text PDFs)",
+    )
+    parser.add_argument(
+        "--no-docling-force-backend-text",
+        dest="docling_force_backend_text",
+        action="store_false",
+        help="Use default Docling text extraction flow",
+    )
+    parser.set_defaults(docling_force_backend_text=DEFAULT_DOCLING_FORCE_BACKEND_TEXT)
+    parser.add_argument(
+        "--docling-images-scale",
+        type=float,
+        default=DEFAULT_DOCLING_IMAGES_SCALE,
+        help="Docling image scale; lower is faster (default 1.0)",
+    )
+    parser.add_argument(
+        "--encode-batch-size",
+        type=int,
+        default=DEFAULT_ENCODE_BATCH_SIZE,
+        help="SentenceTransformer encode batch size (lower if CUDA OOM/unknown errors)",
+    )
     parser.add_argument("--knowledge-root", default=DEFAULT_KNOWLEDGE_DIR, help="Knowledge root for source_key")
     parser.add_argument("--state-path", default=DEFAULT_INGEST_STATE_PATH, help="State JSON path")
     parser.add_argument(
@@ -583,6 +793,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Delete DB rows/state entries for files missing from knowledge root",
     )
+    parser.add_argument(
+        "--db-retries",
+        type=int,
+        default=DEFAULT_DB_RETRIES,
+        help="Retries for transient DB failures per file",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Scan and chunk, but do not write DB/state")
 
     return parser.parse_args()
@@ -607,9 +823,29 @@ def main() -> None:
     logging.info("Skip mode: %s | replace_updated=%s | bootstrap_from_db=%s", args.skip_mode, args.replace_updated, args.bootstrap_from_db)
     logging.info("Requested embed device: %s", args.device)
     logging.info(
-        "Token guard: max_embed_tokens=%d embed_token_overlap=%d",
+        "DB resilience: retries=%d connect_timeout=%ds keepalives_idle=%ds interval=%ds count=%d",
+        max(0, int(args.db_retries)),
+        DEFAULT_DB_CONNECT_TIMEOUT,
+        DEFAULT_DB_KEEPALIVES_IDLE,
+        DEFAULT_DB_KEEPALIVES_INTERVAL,
+        DEFAULT_DB_KEEPALIVES_COUNT,
+    )
+    logging.info(
+        "CUDA fallback: enabled=%s",
+        DEFAULT_FALLBACK_CPU_ON_CUDA_ERROR,
+    )
+    logging.info(
+        "Token guard: max_embed_tokens=%d embed_token_overlap=%d encode_batch_size=%d",
         max(32, int(args.max_embed_tokens)),
         max(0, int(args.embed_token_overlap)),
+        max(1, int(args.encode_batch_size)),
+    )
+    logging.info(
+        "Docling options: do_ocr=%s do_table_structure=%s force_backend_text=%s images_scale=%.2f",
+        bool(args.docling_do_ocr),
+        bool(args.docling_do_table_structure),
+        bool(args.docling_force_backend_text),
+        max(0.1, float(args.docling_images_scale)),
     )
 
     file_records = build_file_records(all_files, knowledge_root)
@@ -620,26 +856,38 @@ def main() -> None:
     # Load embedder only when writing embeddings.
     embedder = None
     device = get_device(args.device)
+    active_embed_device = device
+    active_encode_batch_size = max(1, int(args.encode_batch_size))
+
+    docling_env = (os.getenv("DOCLING_DEVICE", "") or "").strip().lower()
+    docling_force_cpu = docling_env == "cpu"
+    if not docling_env and active_embed_device.startswith("cuda"):
+        # Keep VRAM for embeddings; Docling GPU + embed GPU is unstable on small GPUs.
+        docling_force_cpu = True
+        os.environ["DOCLING_DEVICE"] = "cpu"
+        logging.info(
+            "Docling device auto-set to CPU while embeddings use %s (set DOCLING_DEVICE=cuda to override)",
+            active_embed_device,
+        )
     if not args.dry_run:
         Path(args.model_cache).mkdir(parents=True, exist_ok=True)
-        logging.info("Loading embed model: %s", EMBED_MODEL)
-        embedder = SentenceTransformer(EMBED_MODEL, device=device, cache_folder=args.model_cache)
-        try:
-            embedder.max_seq_length = max(32, int(args.max_embed_tokens))
-            logging.info("Embedder max_seq_length set to %d", embedder.max_seq_length)
-        except Exception:
-            logging.warning("Could not set embedder max_seq_length; relying on model defaults")
-        logging.info("Embed model loaded on %s", device)
+        embedder = load_sentence_embedder(
+            EMBED_MODEL,
+            args.model_cache,
+            active_embed_device,
+            int(args.max_embed_tokens),
+        )
 
     # DB connection (required for non-dry run; optional in dry-run).
     conn = None
+    db_url = None
     needs_db = (not args.dry_run) or args.bootstrap_from_db or args.prune_missing
     if needs_db:
         try:
             db_url, source = resolve_database_url()
             logging.info("Database URL source: %s", source)
             logging.info("DB target: %s", redact_database_url(db_url))
-            conn = psycopg2.connect(db_url)
+            conn = connect_db(db_url)
         except Exception as e:
             if args.dry_run:
                 logging.warning("DB unavailable in dry-run. bootstrap/prune disabled. error=%s", e)
@@ -704,6 +952,8 @@ def main() -> None:
                     else:
                         deleted_total = 0
                         try:
+                            if not is_connection_open(conn):
+                                conn = reconnect_db(conn, db_url, "prune-missing on closed connection")
                             state_source_counts: Dict[str, int] = {}
                             for entry in state_files.values():
                                 src = str(entry.get("source") or "")
@@ -729,7 +979,7 @@ def main() -> None:
                                 deleted_total,
                             )
                         except Exception:
-                            conn.rollback()
+                            safe_rollback(conn)
                             raise
 
             for rec in tqdm(file_records, desc="Processing", unit="file"):
@@ -781,16 +1031,43 @@ def main() -> None:
 
                 embedded_at = utc_now_iso()
 
-                try:
-                    chunks = load_chunks_for_file(
-                        rec,
-                        chunk_size=args.chunk_size,
-                        chunk_overlap=args.chunk_overlap,
-                        embedded_at=embedded_at,
-                    )
-                except Exception as e:
-                    files_failed += 1
-                    logging.error("Failed to parse %s: %s", rec.path, e, exc_info=True)
+                chunks = []
+                parse_ok = False
+                for parse_attempt in range(2):
+                    try:
+                        chunks = load_chunks_for_file(
+                            rec,
+                            chunk_size=args.chunk_size,
+                            chunk_overlap=args.chunk_overlap,
+                            embedded_at=embedded_at,
+                            force_docling_cpu=docling_force_cpu,
+                            docling_do_ocr=bool(args.docling_do_ocr),
+                            docling_do_table_structure=bool(args.docling_do_table_structure),
+                            docling_force_backend_text=bool(args.docling_force_backend_text),
+                            docling_images_scale=max(0.1, float(args.docling_images_scale)),
+                        )
+                        parse_ok = True
+                        break
+                    except Exception as e:
+                        can_retry_cpu = (
+                            DEFAULT_FALLBACK_CPU_ON_CUDA_ERROR
+                            and parse_attempt == 0
+                            and not docling_force_cpu
+                            and is_cuda_runtime_error(e)
+                        )
+                        if can_retry_cpu:
+                            logging.warning(
+                                "CUDA parse error on %s. Switching Docling to CPU and retrying once.",
+                                source_key,
+                            )
+                            docling_force_cpu = True
+                            os.environ["DOCLING_DEVICE"] = "cpu"
+                            continue
+                        files_failed += 1
+                        logging.error("Failed to parse %s: %s", rec.path, e, exc_info=True)
+                        break
+
+                if not parse_ok:
                     continue
 
                 final_chunks = chunks
@@ -825,23 +1102,93 @@ def main() -> None:
                     logging.error("Cannot embed %s: DB connection or embedder unavailable", source_key)
                     continue
 
-                try:
-                    inserted, deleted = insert_chunks_for_file(
-                        conn,
-                        embedder,
-                        final_chunks,
-                        args.collection,
-                        batch_size=max(1, int(args.batch_size)),
-                        replace_source=(
-                            source_key,
-                            rec.source,
-                            source_name_counts.get(rec.source, 0) == 1,
-                        ) if replace_old else None,
-                    )
-                except Exception as e:
-                    conn.rollback()
-                    files_failed += 1
-                    logging.error("Failed to embed %s: %s", source_key, e, exc_info=True)
+                inserted = 0
+                deleted = 0
+                file_embedded = False
+                max_db_retries = max(0, int(args.db_retries))
+                for attempt in range(max_db_retries + 1):
+                    try:
+                        if not is_connection_open(conn):
+                            conn = reconnect_db(conn, db_url, f"closed connection before embed {source_key}")
+
+                        inserted, deleted = insert_chunks_for_file(
+                            conn,
+                            embedder,
+                            final_chunks,
+                            args.collection,
+                            batch_size=max(1, int(args.batch_size)),
+                            encode_batch_size=active_encode_batch_size,
+                            replace_source=(
+                                source_key,
+                                rec.source,
+                                source_name_counts.get(rec.source, 0) == 1,
+                            ) if replace_old else None,
+                        )
+                        file_embedded = True
+                        break
+                    except Exception as e:
+                        safe_rollback(conn)
+                        cuda_error = is_cuda_runtime_error(e)
+                        if cuda_error and active_embed_device.startswith("cuda"):
+                            if active_encode_batch_size > 1:
+                                reduced_batch_size = max(1, active_encode_batch_size // 2)
+                                if reduced_batch_size < active_encode_batch_size:
+                                    logging.warning(
+                                        "CUDA embedding error on %s. Reducing encode_batch_size %d -> %d and retrying.",
+                                        source_key,
+                                        active_encode_batch_size,
+                                        reduced_batch_size,
+                                    )
+                                    active_encode_batch_size = reduced_batch_size
+                                    clear_torch_cache()
+                                    continue
+
+                        if (
+                            DEFAULT_FALLBACK_CPU_ON_CUDA_ERROR
+                            and cuda_error
+                            and active_embed_device.startswith("cuda")
+                        ):
+                            logging.warning(
+                                "CUDA embedding error on %s. Switching embedder to CPU and retrying.",
+                                source_key,
+                            )
+                            try:
+                                active_embed_device = "cpu"
+                                embedder = load_sentence_embedder(
+                                    EMBED_MODEL,
+                                    args.model_cache,
+                                    active_embed_device,
+                                    int(args.max_embed_tokens),
+                                )
+                                docling_force_cpu = True
+                                os.environ["DOCLING_DEVICE"] = "cpu"
+                                continue
+                            except Exception as load_e:
+                                files_failed += 1
+                                logging.error(
+                                    "Failed to switch embedder to CPU for %s: %s",
+                                    source_key,
+                                    load_e,
+                                    exc_info=True,
+                                )
+                                break
+
+                        transient = is_transient_db_error(e)
+                        if transient and attempt < max_db_retries:
+                            logging.warning(
+                                "Transient DB error while embedding %s (attempt %d/%d): %s",
+                                source_key,
+                                attempt + 1,
+                                max_db_retries + 1,
+                                e,
+                            )
+                            conn = reconnect_db(conn, db_url, f"embed retry for {source_key}")
+                            continue
+                        files_failed += 1
+                        logging.error("Failed to embed %s: %s", source_key, e, exc_info=True)
+                        break
+
+                if not file_embedded:
                     continue
 
                 state_files[source_key] = build_state_entry(
@@ -866,8 +1213,7 @@ def main() -> None:
                 )
 
     finally:
-        if conn is not None:
-            conn.close()
+        close_connection(conn)
 
     logging.info("=" * 64)
     logging.info("Ingest complete")

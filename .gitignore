@@ -31,6 +31,7 @@ ollama/
 # OS
 .DS_Store
 Thumbs.db
+nvidia-smi
 # Local caches / ingest state
 .ingest/
 .models/

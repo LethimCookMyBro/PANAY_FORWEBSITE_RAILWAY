@@ -12,7 +12,11 @@ const rawApiTarget =
   "";
 const apiTarget = rawApiTarget || "http://localhost:5000";
 const proxyTimeoutMs = Number(process.env.API_PROXY_TIMEOUT_MS || 180000);
-const proxySocketTimeoutMs = Number(process.env.API_SOCKET_TIMEOUT_MS || 30000);
+const proxySocketTimeoutMs = Number(
+  process.env.API_SOCKET_TIMEOUT_MS ||
+    process.env.API_PROXY_TIMEOUT_MS ||
+    180000,
+);
 
 const isPlaceholder = (value) => {
   const text = String(value || "").trim();
@@ -122,4 +126,5 @@ app.listen(port, "0.0.0.0", () => {
   console.log(`[web] serving: ${distDir}`);
   console.log(`[web] proxy /api -> ${apiTarget}`);
   console.log(`[web] proxy timeout -> ${proxyTimeoutMs}ms`);
+  console.log(`[web] proxy socket timeout -> ${proxySocketTimeoutMs}ms`);
 });
