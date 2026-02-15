@@ -1,0 +1,35 @@
+.git
+.vscode
+.idea
+
+# Dependencies / build outputs
+node_modules
+frontend/node_modules
+frontend/dist
+dist
+build
+
+# Python caches / virtual envs
+venv
+.venv
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+*.pyd
+
+# Local model/data caches
+.models
+**/.models
+.cache
+**/.cache
+.ingest
+**/.ingest
+tmp
+temp
+
+# Keep only golden QA, skip large PDF payload during direct CLI deploys
+backend/data/Knowledge
+!backend/data/Knowledge/
+backend/data/Knowledge/*.pdf
+!backend/data/Knowledge/golden_qa.json

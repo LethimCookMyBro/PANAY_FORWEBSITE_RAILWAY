@@ -6,6 +6,7 @@ import {
   Plus,
   Send,
   MessageSquareText,
+  FileText,
   LoaderCircle,
   LogOut,
   Bot,
@@ -76,6 +77,46 @@ const unwrapResponsePayload = (payload) => {
   return payload;
 };
 
+const stripTrailingSourcesBlock = (text) => {
+  if (typeof text !== "string") return "";
+  return text
+    .replace(
+      /\n{2,}(?:Sources|Source citations|References|อ้างอิง)\s*:\s*(?:\n-\s.*)+\s*$/i,
+      "",
+    )
+    .trim();
+};
+
+const normalizePageNumber = (value) => {
+  if (value == null || value === "") return 0;
+  const n = Number(value);
+  if (Number.isFinite(n) && n > 0) return Math.trunc(n);
+  const match = String(value).match(/\d+/);
+  if (!match) return 0;
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : 0;
+};
+
+const normalizeSourceItems = (value) =>
+  toArray(value)
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const source = String(item.source || item.source_key || "").trim();
+      if (!source) return null;
+      return {
+        source,
+        page: normalizePageNumber(item.page),
+      };
+    })
+    .filter(Boolean);
+
+const formatSourceItemLabel = (item) => {
+  if (!item || typeof item !== "object") return "";
+  const source = String(item.source || "").trim();
+  if (!source) return "";
+  return item.page > 0 ? `${source} • p.${item.page}` : source;
+};
+
 const getReplyText = (payload) => {
   const normalizedPayload = unwrapResponsePayload(payload);
   const candidates = [
@@ -93,10 +134,8 @@ const getReplyText = (payload) => {
   const text = candidates.find(
     (candidate) => typeof candidate === "string" && candidate.trim(),
   );
-  return (
-    text?.trim() ||
-    "I couldn't generate a response right now. Please try again."
-  );
+  const cleaned = stripTrailingSourcesBlock(text || "");
+  return cleaned || "I couldn't generate a response right now. Please try again.";
 };
 
 const getResponseSessionId = (payload) => {
@@ -173,11 +212,15 @@ const mapMessagesFromPayload = (payload) =>
       m?.id ??
       m?.message_id ??
       `${m?.created_at || Date.now()}-${m?.role || "msg"}-${Math.random().toString(36).slice(2, 8)}`,
-    text: m?.content || "",
+    text:
+      m?.role === "assistant"
+        ? stripTrailingSourcesBlock(m?.content || "")
+        : m?.content || "",
     sender: m?.role === "user" ? "user" : "bot",
     timestamp: m?.created_at,
     processingTime: m?.metadata?.processing_time,
     ragas: m?.metadata?.ragas,
+    sources: normalizeSourceItems(m?.metadata?.sources),
     status: "sent",
   }));
 
@@ -569,6 +612,9 @@ export default function Chat({ onLogout }) {
         }
         const replyText = getReplyText(payload);
         const normalizedPayload = unwrapResponsePayload(payload);
+        const responseSources = normalizeSourceItems(
+          normalizedPayload?.sources ?? payload?.sources,
+        );
         const nowIso = new Date().toISOString();
 
         if (requestStartsNewChat) {
@@ -607,6 +653,7 @@ export default function Chat({ onLogout }) {
           processingTime:
             normalizedPayload.processing_time ?? payload.processing_time,
           ragas: normalizedPayload.ragas ?? payload.ragas,
+          sources: responseSources,
           status: "sent",
         };
 
@@ -1105,13 +1152,13 @@ export default function Chat({ onLogout }) {
                         className={`flex flex-col ${m.sender === "user" ? "items-end" : "items-start flex-1 min-w-0"}`}
                       >
                         <div
-                          className={`max-w-[92%] sm:max-w-[85%] px-4 py-3 rounded-2xl text-[14px] leading-relaxed break-words overflow-hidden
+                          className={`max-w-[95%] sm:max-w-[86%] px-4 py-3 rounded-2xl text-[14px] leading-relaxed break-words overflow-hidden
                           ${
                             m.sender === "user"
                               ? m.status === "failed"
                                 ? "bg-red-500 text-white rounded-br-md shadow-md shadow-red-500/20 border border-red-400/60"
                                 : "bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-br-md shadow-md shadow-blue-500/20 border border-blue-300/20"
-                              : "bg-white/95 backdrop-blur text-slate-800 border border-slate-200/75 rounded-bl-md shadow-md prose prose-sm max-w-none"
+                              : "bg-white text-slate-800 border border-slate-200 rounded-bl-md shadow-sm"
                           }`}
                           style={{ overflowWrap: "anywhere" }}
                         >
@@ -1135,6 +1182,24 @@ export default function Chat({ onLogout }) {
                                 %
                               </span>
                             )}
+                          </div>
+                        )}
+
+                        {m.sender === "bot" && toArray(m.sources).length > 0 && (
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {toArray(m.sources).map((sourceItem, sourceIndex) => {
+                              const label = formatSourceItemLabel(sourceItem);
+                              if (!label) return null;
+                              return (
+                                <span
+                                  key={`${m.id || i}-src-${sourceIndex}`}
+                                  className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 text-blue-700 border border-blue-100 px-2.5 py-1 text-[11px] font-medium"
+                                >
+                                  <FileText size={12} />
+                                  {label}
+                                </span>
+                              );
+                            })}
                           </div>
                         )}
 

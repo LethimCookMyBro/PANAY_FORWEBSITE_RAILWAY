@@ -424,7 +424,7 @@ def build_citations_from_docs(docs):
         seen.add(key)
 
         if page > 0:
-            citations.append(f"{source} หน้า {page}")
+            citations.append(f"{source} (page {page})")
         else:
             citations.append(f"{source}")
 
@@ -543,6 +543,10 @@ CRITICAL RULES:
 - If the answer is NOT found, say: "I couldn't find specific information about this."
 - DO NOT make up facts or specifications
 - If context tags include [Source: ... | Page: ...], use them as evidence and never invent page numbers
+- Respond in English only
+- Do not produce contradictory statements in the same answer
+- If context is ambiguous/conflicting, explicitly say it is conflicting and present both interpretations with their source/page tags
+- Every concrete specification or error-code meaning must be supported by the provided context
 - Answer ONLY the CURRENT QUESTION below
 
 FORMATTING:
@@ -551,6 +555,11 @@ FORMATTING:
 - Use **bold** for important terms, menu items [like this], and specifications
 - Structure your response with clear sections if the answer is complex
 - Keep responses clear, concise and scannable
+
+RESPONSE QUALITY:
+- Prefer exact manual wording over generic guidance
+- If evidence is insufficient, say exactly what is missing instead of guessing
+- If the question asks for model-specific behavior, do not answer with cross-vendor assumptions
 
 CURRENT QUESTION:
 {question}
@@ -566,8 +575,10 @@ def build_no_context_prompt() -> PromptTemplate:
 
 GUIDELINES:
 - Clearly state that you don't have specific documentation for this topic
-- You may provide general automation/PLC knowledge if applicable
-- Be honest about limitations - don't guess at specific values or specifications
+- Do not provide guessed values, specs, or model-specific claims
+- Do not provide broad generic troubleshooting lists as a substitute for documentation evidence
+- Ask the user for the exact model/manual keyword if needed
+- Respond in English only
 - Answer ONLY the CURRENT QUESTION below
 
 FORMATTING:
@@ -747,6 +758,15 @@ def answer_question(
             "2. Ask a specific topic (for example: model, error code, or protocol)\n"
             "3. Try again in a few seconds"
         )
+
+    # If we already have context-backed content, avoid a contradictory trailing fallback sentence.
+    if context_texts:
+        reply = re.sub(
+            r"\n*\s*I couldn't find specific information about this\.?\s*$",
+            "",
+            reply,
+            flags=re.IGNORECASE,
+        ).strip()
     
     t_llm_end = time.perf_counter()
     llm_time = t_llm_end - t_llm_start
@@ -803,7 +823,7 @@ def answer_question(
     if allow_source_citations and _env_bool("APPEND_SOURCE_CITATIONS", True):
         citations = build_citations_from_docs(selected_docs)
         if citations:
-            reply += "\n\nอ้างอิง:\n- " + "\n- ".join(citations)
+            reply += "\n\nSources:\n- " + "\n- ".join(citations)
 
     total_time = time.perf_counter() - t0
 
